@@ -1,0 +1,55 @@
+# Visual Studio / .NET build outputs
+.vs/
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+artifacts/
+publish/
+
+# User-specific Visual Studio files
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Compiled binaries and symbols
+*.exe
+*.dll
+*.pdb
+*.cache
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+.nuget/
+
+# WebView2 local runtime/profile data
+KozmikData/
+
+# Alekrythae local presentation memory and temporary files
+*.alek.json
+*.alek.json.tmp
+*.tmp
+
+# IDE/editor folders
+.vscode/
+.idea/
+
+# Operating-system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs and crash dumps
+*.log
+*.dmp
