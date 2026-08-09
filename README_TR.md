@@ -316,6 +316,12 @@ Core geliştirilirken şu ilkeler hedeflenir:
 
 ---
 
+## v0.1.0 uygulama notu
+
+Mimarinin hedefi tekrar kullanılabilir genel bir `.alek` runtime oluşturmaktır. Ancak **v0.1.0 içinde ilk olarak Meggy için geliştirilmiş bazı uyumluluk servisleri hâlâ bulunmaktadır**. Bunlara taşınabilir SQLite/veri aktarım katmanının bazı bölümleri, harici medya işlemleri ve Edge/AI kenetleme entegrasyonu dahildir.
+
+Mevcut Meggy sürümü bunlara bağlı olduğu için ilk public Core sürümünde korunmuşlardır. Bunları tek seferde söküp çalışma sistemini kırmak yerine ilerleyen sürümlerde genel Core servislerine dönüştürmek daha güvenlidir.
+
 ## Mevcut durum
 
 Ałek’ryŧhæ Core aktif geliştirme aşamasındadır.
@@ -353,8 +359,8 @@ Ałek’ryŧhæ Core **source-available proprietary software** olarak yayımlan�
 
 Proje şu lisansla korunur:
 
-**TheDEvorger UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
-SPDX kimliği: `LicenseRef-TheDEvorger-UPSL-1.3`
+**THEDEVORGER UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
+SPDX kimliği: `LicenseRef-TheDevorger-UPSL-1.3`
 
 Tüm koşullar için [`LICENSE.md`](LICENSE.md) dosyasını oku.
 
@@ -392,10 +398,10 @@ Ana README İngilizcedir.
 
 ## Geliştirici
 
-**TheDEvorger**
+**TheDevorger**
 
 Lisans / yasal iletişim:  
-`TheDEvorger.alekrythae.dev@gmail.com`
+`thedevorger.alekrythae.dev@gmail.com`
 
 ---
 

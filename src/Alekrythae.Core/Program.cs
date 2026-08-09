@@ -297,7 +297,7 @@ namespace AlekrythaeCore
                 using (var appKey = Registry.CurrentUser.CreateSubKey(
                     $@"Software\Classes\Applications\{appRegistrationName}"))
                 {
-                    appKey?.SetValue("FriendlyAppName", "Ałek’ryŧhæ v0.0.0");
+                    appKey?.SetValue("FriendlyAppName", "Ałek’ryŧhæ Core v0.1.0");
 
                     using (var supportedTypes = appKey?.CreateSubKey("SupportedTypes"))
                     {
@@ -337,9 +337,9 @@ namespace AlekrythaeCore
                 string uninstallCommand = $"\"{comSpec}\" /d /c \"\"{uninstallCmd}\"\"";
 
                 using RegistryKey? key = Registry.CurrentUser.CreateSubKey(
-                    @"Software\Microsoft\Windows\CurrentVersion\Uninstall\AlekrythaeCoreV000");
-                key?.SetValue("DisplayName", "Ałek’ryŧhæ v0.0.0");
-                key?.SetValue("DisplayVersion", "0.0.0");
+                    @"Software\Microsoft\Windows\CurrentVersion\Uninstall\AlekrythaeCore");
+                key?.SetValue("DisplayName", "Ałek’ryŧhæ Core");
+                key?.SetValue("DisplayVersion", "0.1.0");
                 key?.SetValue("Publisher", "Ałek’ryŧhæ");
                 key?.SetValue("InstallLocation", baseFolder);
                 key?.SetValue("UninstallString", uninstallCommand);
@@ -404,7 +404,7 @@ namespace AlekrythaeCore
                     ? new System.Drawing.Icon(trayIcoPath)
                     : System.Drawing.SystemIcons.Shield,
                 Visible = true,
-                Text = "Ałek’ryŧhæ v0.0.0"
+                Text = "Ałek’ryŧhæ Core v0.1.0"
             };
 
             var trayMenu = new ContextMenuStrip();

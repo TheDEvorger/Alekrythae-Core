@@ -247,7 +247,7 @@ namespace AlekrythaeCore
                         Format = PackageFormat,
                         FormatVersion = PackageFormatVersion,
                         App = "Ałek’ryŧhæ Meggy The DM Master",
-                        AppVersion = "0.0.0",
+                        AppVersion = "0.1.0",
                         ArchitectureRevision = sourceRevision,
                         Storage = "portable-sqlite-with-legacy-json-migration",
                         Reason = reason,

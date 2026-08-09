@@ -111,7 +111,8 @@ function Remove-RegistryData {
         }
         Remove-Item "HKCU:\Software\Classes\$ProgId" -Recurse -Force
         Remove-Item "HKCU:\Software\Classes\Applications\Alekrythae Core.exe" -Recurse -Force
-        Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AlekrythaeCoreV000" -Recurse -Force
+        Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AlekrythaeCore" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AlekrythaeCoreV000" -Recurse -Force -ErrorAction SilentlyContinue
     } catch {
         $Failures.Add("Dosya ilişkilendirmesi tamamen temizlenemedi: $($_.Exception.Message)")
     }

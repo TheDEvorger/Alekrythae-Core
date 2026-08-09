@@ -92,7 +92,7 @@ namespace AlekrythaeCore
             this.Activate();
 
             // 1. PENCERE ŞASESİ: Modern, Kenarlıksız ve Transparan
-            this.Title = "Kozmik Kapı v0.0.0 - " + Path.GetFileName(jsPath);
+            this.Title = "Ałek’ryŧhæ Core v0.1.0 - " + Path.GetFileName(jsPath);
             this.Width = 1024;
             this.Height = 768;
             this.WindowStartupLocation = WindowStartupLocation.CenterScreen;

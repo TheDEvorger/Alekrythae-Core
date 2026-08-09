@@ -309,6 +309,12 @@ The project aims to keep the runtime:
 
 ---
 
+## v0.1.0 implementation note
+
+The architecture is intended to become a reusable `.alek` runtime, but **v0.1.0 still contains compatibility services originally developed for Meggy**, including parts of the portable SQLite/data-transfer layer, external-media handling and Edge/AI docking integration.
+
+These components are kept in the first public Core release because the current Meggy application depends on them. They are implementation details to be generalized gradually rather than removed in a breaking cleanup.
+
 ## Current status
 
 Ałek’ryŧhæ Core is under active development.
@@ -337,8 +343,8 @@ It is **not open-source software** and is not distributed under MIT, Apache, GPL
 
 The project is licensed under:
 
-**TheDEvorger UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
-SPDX identifier: `LicenseRef-TheDEvorger-UPSL-1.3`
+**THEDEVORGER UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
+SPDX identifier: `LicenseRef-TheDevorger-UPSL-1.3`
 
 See [`LICENSE.md`](LICENSE.md) for the complete terms.
 
@@ -376,10 +382,10 @@ For the Turkish version:
 
 ## Author
 
-**TheDEvorger**
+**TheDevorger**
 
 Licensing / legal contact:  
-`TheDEvorger.alekrythae.dev@gmail.com`
+`thedevorger.alekrythae.dev@gmail.com`
 
 ---
 
