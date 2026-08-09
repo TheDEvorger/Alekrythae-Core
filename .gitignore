@@ -1,0 +1,81 @@
+# Visual Studio
+.vs/
+.vscode/
+.idea/
+
+# .NET build outputs
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+
+# Publish and distribution outputs
+publish/
+dist/
+**/publish/
+
+# User-specific Visual Studio files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# Build and debug files
+*.pdb
+*.cache
+*.tmp
+*.temp
+*.log
+
+# NuGet generated files
+packages/
+*.nupkg
+*.snupkg
+
+# WebView2 runtime cache and user data
+EBWebView/
+WebView2/
+WebView2Data/
+**/EBWebView/
+**/WebView2/
+**/WebView2Data/
+
+# Windows-generated files
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS-generated files
+.DS_Store
+
+# Temporary and backup files
+*~
+*.bak
+*.backup
+*.old
+*.orig
+*.swp
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local application data
+logs/
+Logs/
+crashlogs/
+CrashLogs/
+release/
+# Local runtime/user profile data
+KozmikData/
+**/KozmikData/
+*.log
+*.alekdata
+
+# Build outputs
+**/bin/
+**/obj/
+dist/
+release/
