@@ -1,11 +1,11 @@
-# THEDEVORGER UNIVERSAL PROPRIETARY SOFTWARE LICENSE
+# TheDEvorger UNIVERSAL PROPRIETARY SOFTWARE LICENSE
 
 ## Version 1.3
 
 **Effective Date:** 27 July 2026
-**SPDX-License-Identifier:** `LicenseRef-TheDevorger-UPSL-1.3`
+**SPDX-License-Identifier:** `LicenseRef-TheDEvorger-UPSL-1.3`
 
-Copyright © 2026–present TheDevorger.
+Copyright © 2026–present TheDEvorger.
 All Rights Reserved.
 
 ---
@@ -40,11 +40,11 @@ Where this License is included with or expressly applied to the Core, a `.alek` 
 
 ## 1.1 Licensor
 
-“Licensor” means the natural person who publishes under the pseudonym “TheDevorger”, together with any lawful successor, assignee, or entity expressly designated in writing by that person as the rights holder of the applicable Covered Materials. The use of a pseudonym does not waive, transfer, or limit any right of the Licensor.
+“Licensor” means the natural person who publishes under the pseudonym “TheDEvorger”, together with any lawful successor, assignee, or entity expressly designated in writing by that person as the rights holder of the applicable Covered Materials. The use of a pseudonym does not waive, transfer, or limit any right of the Licensor.
 
 Licensing and legal contact:
 
-**[thedevorger.alekrythae.dev@gmail.com](mailto:thedevorger.alekrythae.dev@gmail.com)**
+**[TheDEvorger.alekrythae.dev@gmail.com](mailto:TheDEvorger.alekrythae.dev@gmail.com)**
 
 ## 1.2 You
 
@@ -2317,7 +2317,7 @@ No permission exists until express written authorization is issued by the Licens
 
 Requests concerning licensing, permissions, commercial use, distribution, Core integration, `.alek` Application distribution, package-format implementation, compatibility, contributions, legal notices, or other matters may be sent to:
 
-**[thedevorger.alekrythae.dev@gmail.com](mailto:thedevorger.alekrythae.dev@gmail.com)**
+**[TheDEvorger.alekrythae.dev@gmail.com](mailto:TheDEvorger.alekrythae.dev@gmail.com)**
 
 Sending a request does not grant permission.
 
@@ -2327,11 +2327,11 @@ Silence, non-response, negotiation, a draft agreement, or an informal discussion
 
 ## END OF LICENSE
 
-**THEDEVORGER UNIVERSAL PROPRIETARY SOFTWARE LICENSE**
+**TheDEvorger UNIVERSAL PROPRIETARY SOFTWARE LICENSE**
 **Version 1.3**
 
 **SPDX-License-Identifier:**
-`LicenseRef-TheDevorger-UPSL-1.3`
+`LicenseRef-TheDEvorger-UPSL-1.3`
 
-Copyright © 2026–present TheDevorger.
+Copyright © 2026–present TheDEvorger.
 All Rights Reserved.
