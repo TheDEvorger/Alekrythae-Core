@@ -337,8 +337,8 @@ It is **not open-source software** and is not distributed under MIT, Apache, GPL
 
 The project is licensed under:
 
-**THEDEVORGER UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
-SPDX identifier: `LicenseRef-TheDevorger-UPSL-1.3`
+**TheDEvorger UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
+SPDX identifier: `LicenseRef-TheDEvorger-UPSL-1.3`
 
 See [`LICENSE.md`](LICENSE.md) for the complete terms.
 
@@ -376,10 +376,10 @@ For the Turkish version:
 
 ## Author
 
-**TheDevorger**
+**TheDEvorger**
 
 Licensing / legal contact:  
-`thedevorger.alekrythae.dev@gmail.com`
+`TheDEvorger.alekrythae.dev@gmail.com`
 
 ---
 
