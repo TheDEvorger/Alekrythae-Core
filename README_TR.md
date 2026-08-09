@@ -353,8 +353,8 @@ Ałek’ryŧhæ Core **source-available proprietary software** olarak yayımlan�
 
 Proje şu lisansla korunur:
 
-**THEDEVORGER UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
-SPDX kimliği: `LicenseRef-TheDevorger-UPSL-1.3`
+**TheDEvorger UNIVERSAL PROPRIETARY SOFTWARE LICENSE — Version 1.3**  
+SPDX kimliği: `LicenseRef-TheDEvorger-UPSL-1.3`
 
 Tüm koşullar için [`LICENSE.md`](LICENSE.md) dosyasını oku.
 
@@ -392,10 +392,10 @@ Ana README İngilizcedir.
 
 ## Geliştirici
 
-**TheDevorger**
+**TheDEvorger**
 
 Lisans / yasal iletişim:  
-`thedevorger.alekrythae.dev@gmail.com`
+`TheDEvorger.alekrythae.dev@gmail.com`
 
 ---
 
