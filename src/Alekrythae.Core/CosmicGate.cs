@@ -25,10 +25,13 @@ namespace AlekrythaeCore
 {
     public class CosmicGate : Window
     {
-        private WebView2CompositionControl _webView;
+        private WebView2 _webView;
+        private bool _hostExitRequested;
+        private volatile bool _hostExitClosed;
         private readonly EdgeChatGptDock _edgeChatGptDock;
         private readonly PortableGameStore _gameStore;
         private readonly DataTransferService _dataTransferService;
+        private readonly DeveloperBridge _developerBridge;
         private string _jsPath;
         private string _memoryPath; // .alek dosyasının yanındaki .json hafıza dosyası
         private string _rootFolder; // Güvenlik sandbox'ı: .alek dosyasının bulunduğu klasör
@@ -66,6 +69,7 @@ namespace AlekrythaeCore
             _rootFolder = dir.EndsWith(Path.DirectorySeparatorChar.ToString()) ? dir : dir + Path.DirectorySeparatorChar;
             _gameStore = new PortableGameStore(_rootFolder);
             _dataTransferService = new DataTransferService(_rootFolder, this);
+            _developerBridge = new DeveloperBridge();
             _startFullscreen = ReadAlekWindowCommand(jsPath);
 
             try
@@ -92,7 +96,7 @@ namespace AlekrythaeCore
             this.Activate();
 
             // 1. PENCERE ŞASESİ: Modern, Kenarlıksız ve Transparan
-            this.Title = "Ałek’ryŧhæ Core v0.1.0 - " + Path.GetFileName(jsPath);
+            this.Title = "Ałek’ryŧhæ Core v0.1.2 - " + Path.GetFileName(jsPath);
             this.Width = 1024;
             this.Height = 768;
             this.WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -162,9 +166,12 @@ namespace AlekrythaeCore
             // “Boyuttan Çık” komutundan veya Windows görev çubuğundan yapılır.
 
             // 4. WEB İÇERİK ALANI
-            // CompositionControl kullanıyoruz; böylece WPF title bar gerçekten
-            // WebView'in üstünde görünebilir ve içerik onun arkasına uzanabilir.
-            _webView = new WebView2CompositionControl
+            // Yerleşik WPF üst şerit artık 0 px olduğu için WPF elemanlarını WebView'in
+            // üstüne bindirmemiz gerekmiyor. WebView2CompositionControl, Chromium
+            // yüzeyini GraphicsCaptureSession ile WPF Image'a taşıdığı için boşta bile
+            // gereksiz GPU kopyalama/composition yükü oluşturabiliyor. Standart WebView2
+            // doğrudan HWND host yolunu kullanır ve bu uygulamada airspace gereksinimi yoktur.
+            _webView = new WebView2
             {
                 Visibility = Visibility.Visible,
                 DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 5, 5, 8),
@@ -193,6 +200,7 @@ namespace AlekrythaeCore
                     };
                     var env = await CoreWebView2Environment.CreateAsync(null, _engineDataFolder, environmentOptions);
                     await _webView.EnsureCoreWebView2Async(env);
+                    _developerBridge.Attach(_webView.CoreWebView2, Dispatcher);
                     if (!_webViewZoomHooked)
                     {
                         _webView.ZoomFactorChanged += OnWebViewZoomFactorChanged;
@@ -261,17 +269,72 @@ namespace AlekrythaeCore
                 do
                 {
                     _powerStateChangePending = false;
-                    // Meggy görünmez, küçültülmüş veya odaksızsa Chromium tamamen uyur.
-                    // Ayrı gerçek Edge penceresindeki ChatGPT bu yaşam döngüsüne dahil değildir.
-                    bool shouldSuspend = !IsVisible || !IsActive || WindowState == WindowState.Minimized;
-                    if (shouldSuspend && !_webViewSuspended)
+
+                    bool isHiddenOrMinimized = !IsVisible || WindowState == WindowState.Minimized;
+                    bool isInactive = !IsActive;
+
+                    if (isHiddenOrMinimized)
                     {
-                        _webViewSuspended = await _webView.CoreWebView2.TrySuspendAsync();
+                        // WebView2, TrySuspendAsync çağrılırken görünür olmamalıdır.
+                        // WPF Visibility değişikliği controller'ın IsVisible durumunu da
+                        // kapatır. Aksi halde TrySuspendAsync ERROR_INVALID_STATE ile
+                        // başarısız olur ve renderer/GPU süreci çalışmaya devam eder.
+                        if (_webView.Visibility != Visibility.Hidden)
+                            _webView.Visibility = Visibility.Hidden;
+
+                        // TrySuspendAsync ve MemoryUsageTargetLevel iki ayrı güç
+                        // yönetimi yoludur. Pencere minimize olmadan hemen önce odaksız
+                        // durumda Low uygulanmış olabilir; suspend yoluna girmeden önce
+                        // hedefi normale döndür.
+                        try
+                        {
+                            _webView.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Normal;
+                        }
+                        catch { }
+
+                        // DependencyProperty değişikliğinin WebView2 controller'a
+                        // aktarılmasına bir UI turu ver. Suspend yine de best-effort'tur.
+                        await Task.Yield();
+
+                        if (!_webViewSuspended)
+                        {
+                            bool suspended = false;
+                            try
+                            {
+                                suspended = await _webView.CoreWebView2.TrySuspendAsync();
+                            }
+                            catch (Exception ex)
+                            {
+                                AppendWebLog("suspend: " + ex.Message);
+                            }
+
+                            _webViewSuspended = suspended;
+                        }
                     }
-                    else if (!shouldSuspend && _webViewSuspended)
+                    else
                     {
-                        _webView.CoreWebView2.Resume();
-                        _webViewSuspended = false;
+                        if (_webViewSuspended)
+                        {
+                            _webView.CoreWebView2.Resume();
+                            _webViewSuspended = false;
+                        }
+
+                        if (_webView.Visibility != Visibility.Visible)
+                            _webView.Visibility = Visibility.Visible;
+
+                        // Pencere başka bir uygulamanın arkasında ama hâlâ ekranda ise
+                        // WebView görünürlüğünü kapatamayız; aksi halde arka plandaki
+                        // Meggy yüzeyi siyaha döner. Bu durumda Microsoft'un önerdiği
+                        // düşük bellek hedefini kullan. JS tarafı da blur'da kendi render
+                        // döngülerini uyuttuğu için standart WebView2 ile beraber GPU/CPU
+                        // yükü çok daha düşük kalır.
+                        try
+                        {
+                            _webView.CoreWebView2.MemoryUsageTargetLevel = isInactive
+                                ? CoreWebView2MemoryUsageTargetLevel.Low
+                                : CoreWebView2MemoryUsageTargetLevel.Normal;
+                        }
+                        catch { }
                     }
                 } while (_powerStateChangePending);
             }
@@ -574,6 +637,97 @@ namespace AlekrythaeCore
         }
 
         // ============================================================
+        // HOST KAPANIŞI
+        // app.exit, Promise tabanlı veya id'siz legacy mesaj olarak gelebilir.
+        // Kapanış WebView/renderer callback'ine bırakılmaz; host doğrudan pencereyi kapatır.
+        // ============================================================
+        private void HandleHostExitRequest(string? requestId)
+        {
+            if (!string.IsNullOrWhiteSpace(requestId))
+            {
+                SendResponse(requestId, new { ok = true, closing = true });
+            }
+
+            if (_hostExitRequested)
+                return;
+
+            _hostExitRequested = true;
+            AppendWebLog("app.exit: host shutdown requested");
+
+            // Normal yol başarısız olursa süreç Ay ekranında sonsuza kadar kalmasın.
+            // OnClosed çalıştığında bayrak true olur ve bu emniyet yolu hiçbir şey yapmaz.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(1500).ConfigureAwait(false);
+                if (_hostExitClosed)
+                    return;
+
+                try
+                {
+                    Application.Current?.Dispatcher.Invoke(() =>
+                    {
+                        if (!_hostExitClosed)
+                            Application.Current.Shutdown();
+                    });
+                }
+                catch
+                {
+                    // Bir sonraki aşama process fallback'tir.
+                }
+
+                await Task.Delay(650).ConfigureAwait(false);
+                if (_hostExitClosed)
+                    return;
+
+                try
+                {
+                    Environment.Exit(0);
+                }
+                catch
+                {
+                    // Process zaten kapanıyor olabilir.
+                }
+            });
+
+            void CloseNow()
+            {
+                if (_hostExitClosed)
+                    return;
+
+                try
+                {
+                    // WebMessageReceived zaten UI thread'de çalışır. BeginInvoke kullanmak
+                    // çıkışın renderer/dispatcher yaşam döngüsünün arkasında kalmasına yol açabiliyordu.
+                    // Close burada senkron olarak çağrılır.
+                    Close();
+                }
+                catch (Exception ex)
+                {
+                    AppendWebLog("app.exit Close failed: " + ex);
+                    try
+                    {
+                        Application.Current?.Shutdown();
+                    }
+                    catch
+                    {
+                        try { Environment.Exit(0); } catch { }
+                    }
+                }
+            }
+
+            if (Dispatcher.CheckAccess())
+            {
+                CloseNow();
+            }
+            else
+            {
+                Dispatcher.Invoke(
+                    new Action(CloseNow),
+                    System.Windows.Threading.DispatcherPriority.Send);
+            }
+        }
+
+        // ============================================================
         // JS -> C# KÖPRÜSÜ
         // Eski mesajlar (id'siz): { "op":"save", "data":"..." } → geriye uyumlu
         // Yeni mesajlar (id'li):  { "op":"fs.readText", "id":"req_1", "payload":{...} }
@@ -587,13 +741,27 @@ namespace AlekrythaeCore
                 if (!doc.RootElement.TryGetProperty("op", out var opEl)) return;
                 string op = opEl.GetString() ?? "";
 
-                // Yeni API sistemi: id varsa Promise tabanlı response
-                if (doc.RootElement.TryGetProperty("id", out var idEl))
+                string? requestId = null;
+                if (doc.RootElement.TryGetProperty("id", out var requestIdEl) &&
+                    requestIdEl.ValueKind == JsonValueKind.String)
                 {
-                    string reqId = idEl.GetString() ?? "";
+                    requestId = requestIdEl.GetString();
+                }
+
+                // app.exit host seviyesinde özel komuttur. Promise id'si olsun veya olmasın
+                // API servis zincirine girmeden doğrudan pencere kapanışına gider.
+                if (string.Equals(op, "app.exit", StringComparison.OrdinalIgnoreCase))
+                {
+                    HandleHostExitRequest(requestId);
+                    return;
+                }
+
+                // Yeni API sistemi: id varsa Promise tabanlı response
+                if (requestId != null)
+                {
                     JsonElement payload = doc.RootElement.TryGetProperty("payload", out var pEl)
                         ? pEl : default;
-                    HandleApiRequest(op, reqId, payload);
+                    HandleApiRequest(op, requestId, payload);
                     return;
                 }
 
@@ -678,6 +846,12 @@ namespace AlekrythaeCore
                     return;
                 }
 
+                if (_developerBridge.TryHandleApi(op, payload, out object developerResult))
+                {
+                    SendResponse(reqId, developerResult);
+                    return;
+                }
+
                 string relPath = "";
                 if (payload.ValueKind == JsonValueKind.Object &&
                     payload.TryGetProperty("path", out var pathEl))
@@ -690,8 +864,9 @@ namespace AlekrythaeCore
                     // ─── app.exit ───
                     case "app.exit":
                     {
-                        SendResponse(reqId, new { ok = true });
-                        Dispatcher.BeginInvoke(new Action(Close));
+                        // Normalde OnWebMessageReceived bu komutu daha önce yakalar.
+                        // Burada bırakılan yol doğrudan çağrılar için aynı sağlam davranışı korur.
+                        HandleHostExitRequest(reqId);
                         return;
                     }
 
@@ -1446,6 +1621,7 @@ namespace AlekrythaeCore
 
         protected override void OnClosed(EventArgs e)
         {
+            _hostExitClosed = true;
             base.OnClosed(e);
             if (_altSSystemCharacterHooked)
             {
@@ -1465,6 +1641,7 @@ namespace AlekrythaeCore
             try { _webView.CoreWebView2.ProcessFailed -= OnProcessFailed; } catch { }
             try { if (_consoleReceiver != null) _consoleReceiver.DevToolsProtocolEventReceived -= OnConsoleApiCalled; } catch { }
             try { if (_exceptionReceiver != null) _exceptionReceiver.DevToolsProtocolEventReceived -= OnRuntimeExceptionThrown; } catch { }
+            try { _developerBridge.Dispose(); } catch { }
             try { _edgeChatGptDock.Dispose(); } catch { }
             _webView.Dispose();
         }

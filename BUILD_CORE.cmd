@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-set "VERSION=0.1.0"
+set "VERSION=0.1.2"
 set "PROJECT=src\Alekrythae.Core\Alekrythae.Core.csproj"
 set "PUBLISH_DIR=dist\Alekrythae-Core-v%VERSION%-Windows-x64"
 set "RELEASE_DIR=release"

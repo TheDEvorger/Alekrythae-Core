@@ -21,7 +21,7 @@ namespace AlekrythaeCore
 
         private sealed class GraphicsConfig
         {
-            public int SchemaVersion { get; set; } = 5;
+            public int SchemaVersion { get; set; } = 6;
             public string Preference { get; set; } = "system";
             public string SelectedAdapterId { get; set; } = string.Empty;
             public bool UserExplicitlySelected { get; set; }
@@ -82,13 +82,19 @@ namespace AlekrythaeCore
                 case "listGraphicsAdapters":
                 {
                     List<AdapterInfo> adapters = EnumerateAdapters();
+                    AdapterInfo? recommended = ChooseStrongestAdapter(adapters);
                     result = new
                     {
                         ok = true,
                         adapters,
                         config = LoadConfig(),
+                        // Existing fields and values are intentionally preserved for older .alek apps.
                         exactAdapterSelection = false,
                         selectionMode = "windows-preference-class",
+                        // Additive fields for newer adapter-only selectors.
+                        recommendedAdapterId = recommended?.id ?? string.Empty,
+                        recommendedAdapterName = recommended?.name ?? string.Empty,
+                        adapterSelectionAvailable = adapters.Count > 0,
                         detectionSources = adapters.Select(x => x.source).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToArray()
                     };
                     return true;
@@ -118,10 +124,10 @@ namespace AlekrythaeCore
             return NormalizePreference(config.Preference) switch
             {
                 "software" => "--use-angle=swiftshader --enable-webgl --ignore-gpu-blocklist",
-                // Donanım seçimi tek kaynak olarak Windows'un uygulama başına
-                // GPU tercihinde tutulur. Aynı seçimi Chromium bayrağıyla ikinci
-                // kez zorlamak hibrit sistemlerde gereksiz adaptör geçişi yaratır.
-                "high-performance" => string.Empty,
+                // Windows per-app preference remains the primary compatibility path.
+                // Chromium's supported browser switch is added only for the high-performance
+                // class so WebView2's GPU process also requests the strongest GPU on hybrid PCs.
+                "high-performance" => "--force-high-performance-gpu",
                 "power-saving" => string.Empty,
                 _ => string.Empty
             };
@@ -132,75 +138,159 @@ namespace AlekrythaeCore
             try
             {
                 GraphicsConfig config = LoadConfig();
+                List<AdapterInfo> adapters = EnumerateAdapters();
+
+                if (config.UserExplicitlySelected)
+                {
+                    // New adapter-based selection: keep the user's adapter permanently.
+                    // If a driver/update temporarily hides that adapter, keep the saved ID
+                    // and its last power-class preference instead of silently overwriting it.
+                    if (!string.IsNullOrWhiteSpace(config.SelectedAdapterId))
+                    {
+                        AdapterInfo? selected = FindAdapter(adapters, config.SelectedAdapterId);
+                        if (selected != null)
+                        {
+                            config.Preference = PreferenceForAdapter(selected);
+                            config.SchemaVersion = 6;
+                            SaveConfig(config);
+                        }
+                    }
+                    // Legacy preference-only selection is intentionally left untouched.
+                }
+                else
+                {
+                    // First use / automatic mode: start with the strongest detected GPU.
+                    // This remains automatic until a user explicitly picks an adapter.
+                    AdapterInfo? strongest = ChooseStrongestAdapter(adapters);
+                    if (strongest != null)
+                    {
+                        config.SchemaVersion = 6;
+                        config.SelectedAdapterId = strongest.id;
+                        config.Preference = PreferenceForAdapter(strongest);
+                        config.UserExplicitlySelected = false;
+                        SaveConfig(config);
+                    }
+                }
+
                 WriteWindowsPreference(NormalizePreference(config.Preference));
             }
             catch
             {
-                // GPU tercihi Core'un açılmasını hiçbir zaman engellememeli.
+                // GPU selection must never prevent Core or unrelated .alek apps from starting.
             }
         }
 
         private static object ApplyPreference(JsonElement payload)
         {
-            string preference = "system";
             string adapterId = string.Empty;
+            string legacyPreference = "system";
+            bool hasLegacyPreference = false;
+            bool automatic = false;
+            bool hasAutomatic = false;
+
             if (payload.ValueKind == JsonValueKind.Object)
             {
-                if (payload.TryGetProperty("preference", out JsonElement p))
-                    preference = p.GetString() ?? "system";
                 if (payload.TryGetProperty("adapterId", out JsonElement a))
                     adapterId = a.GetString() ?? string.Empty;
+
+                // Backward compatibility: older .alek apps may still send only preference.
+                if (payload.TryGetProperty("preference", out JsonElement p))
+                {
+                    legacyPreference = p.GetString() ?? "system";
+                    hasLegacyPreference = true;
+                }
+
+                if (payload.TryGetProperty("automatic", out JsonElement auto) &&
+                    (auto.ValueKind == JsonValueKind.True || auto.ValueKind == JsonValueKind.False))
+                {
+                    automatic = auto.GetBoolean();
+                    hasAutomatic = true;
+                }
             }
 
             List<AdapterInfo> adapters = EnumerateAdapters();
-            AdapterInfo? selected = adapters.FirstOrDefault(item =>
-                string.Equals(item.id, adapterId, StringComparison.OrdinalIgnoreCase));
+            AdapterInfo? selected = null;
+            bool explicitAdapterSelection = !string.IsNullOrWhiteSpace(adapterId) && !(hasAutomatic && automatic);
+            bool explicitLegacyPreference = !explicitAdapterSelection && hasLegacyPreference && !(hasAutomatic && automatic);
+            string preference;
 
-            // Windows, uygulama başına tam GPU kimliği yerine güç sınıfı uygular.
-            // Kullanıcı listeden NVIDIA/AMD ayrık kartı seçerse yüksek performans,
-            // Intel/entegre kartı seçerse güç tasarrufu sınıfını otomatik eşleştir.
-            if (selected != null && !string.Equals(preference, "software", StringComparison.OrdinalIgnoreCase))
+            if (explicitAdapterSelection)
             {
-                if (string.Equals(selected.kind, "discrete", StringComparison.OrdinalIgnoreCase))
-                    preference = "high-performance";
-                else if (string.Equals(selected.kind, "integrated", StringComparison.OrdinalIgnoreCase))
-                    preference = "power-saving";
+                selected = FindAdapter(adapters, adapterId);
+                if (selected == null)
+                {
+                    return new
+                    {
+                        ok = false,
+                        error = "adapter_not_found",
+                        message = "Selected GPU could not be found. Rescan the adapters and choose again."
+                    };
+                }
+
+                adapterId = selected.id;
+                preference = PreferenceForAdapter(selected);
+            }
+            else if (explicitLegacyPreference)
+            {
+                // Preserve the old Core contract exactly: preference-only callers still work.
+                preference = NormalizePreference(legacyPreference);
+                adapterId = string.Empty;
+            }
+            else
+            {
+                // New automatic/default path.
+                selected = ChooseStrongestAdapter(adapters);
+                adapterId = selected?.id ?? string.Empty;
+                preference = PreferenceForAdapter(selected);
             }
 
-            preference = NormalizePreference(preference);
+            bool userExplicit = explicitAdapterSelection || explicitLegacyPreference;
             GraphicsConfig config = new()
             {
-                SchemaVersion = 5,
+                SchemaVersion = 6,
                 Preference = preference,
                 SelectedAdapterId = adapterId,
-                UserExplicitlySelected = true
+                UserExplicitlySelected = userExplicit
             };
             SaveConfig(config);
             WriteWindowsPreference(preference);
 
             string selectedName = selected?.name ?? string.Empty;
-            string message = preference switch
+            string message;
+            if (explicitAdapterSelection)
             {
-                "power-saving" => string.IsNullOrWhiteSpace(selectedName)
-                    ? "Güç tasarrufu GPU tercihi kaydedildi. Core'u kapatıp yeniden aç."
-                    : $"{selectedName} için güç tasarrufu sınıfı kaydedildi. Core'u kapatıp yeniden aç.",
-                "high-performance" => string.IsNullOrWhiteSpace(selectedName)
-                    ? "Yüksek performans GPU tercihi kaydedildi. Core'u kapatıp yeniden aç."
-                    : $"{selectedName} için yüksek performans sınıfı kaydedildi. Core'u kapatıp yeniden aç.",
-                "software" => "Yazılım tabanlı güvenli WebGL çizimi kaydedildi. Core'u kapatıp yeniden aç.",
-                _ => "GPU tercihi Windows yönetimine bırakıldı. Core'u kapatıp yeniden aç."
-            };
+                message = $"{selectedName} was saved as the selected GPU. Restart Ałek’ryŧhæ to apply it to WebView2.";
+            }
+            else if (explicitLegacyPreference)
+            {
+                message = preference switch
+                {
+                    "power-saving" => "Power-saving GPU preference was saved. Restart Ałek’ryŧhæ to apply it.",
+                    "high-performance" => "High-performance GPU preference was saved. Restart Ałek’ryŧhæ to apply it.",
+                    "software" => "Software rendering preference was saved. Restart Ałek’ryŧhæ to apply it.",
+                    _ => "Windows-managed GPU preference was saved. Restart Ałek’ryŧhæ to apply it."
+                };
+            }
+            else
+            {
+                message = string.IsNullOrWhiteSpace(selectedName)
+                    ? "Automatic GPU selection was saved."
+                    : $"{selectedName} was selected automatically as the strongest detected GPU.";
+            }
 
             return new
             {
                 ok = true,
                 message,
                 restartRequired = true,
+                // Legacy response fields are retained.
                 preference,
                 selectedAdapterId = adapterId,
                 selectedAdapterName = selectedName,
                 exactAdapterSelection = false,
-                selectionMode = "windows-preference-class"
+                selectionMode = "windows-preference-class",
+                // Additive field for newer UIs.
+                userExplicitlySelected = userExplicit
             };
         }
 
@@ -553,16 +643,11 @@ namespace AlekrythaeCore
                 if (config == null) return new GraphicsConfig();
                 config.Preference = NormalizePreference(config.Preference);
                 config.SelectedAdapterId ??= string.Empty;
-                // Önceki paketlerin otomatik ayrık GPU zorlamasını kaldır.
-                // Kullanıcının sonradan açıkça yaptığı seçimler korunur.
-                if (config.SchemaVersion < 5)
+                // Schema 6 adds adapter-first automatic selection without deleting old state.
+                // Existing preference-only callers and manual adapter selections remain valid.
+                if (config.SchemaVersion < 6)
                 {
-                    if (!config.UserExplicitlySelected)
-                    {
-                        config.Preference = "system";
-                        config.SelectedAdapterId = string.Empty;
-                    }
-                    config.SchemaVersion = 5;
+                    config.SchemaVersion = 6;
                     SaveConfig(config);
                 }
                 return config;
@@ -583,6 +668,60 @@ namespace AlekrythaeCore
             }));
             if (File.Exists(ConfigPath)) File.Delete(ConfigPath);
             File.Move(temp, ConfigPath);
+        }
+
+        private static int AdapterStrengthTier(AdapterInfo adapter)
+        {
+            string kind = adapter.kind ?? string.Empty;
+            if (string.Equals(kind, "discrete", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (string.Equals(kind, "graphics-adapter", StringComparison.OrdinalIgnoreCase)) return 2;
+            if (string.Equals(kind, "integrated", StringComparison.OrdinalIgnoreCase)) return 1;
+            return 0;
+        }
+
+        private static AdapterInfo? ChooseStrongestAdapter(IEnumerable<AdapterInfo> adapters)
+        {
+            List<AdapterInfo> candidates = adapters
+                .Where(x => !string.IsNullOrWhiteSpace(x.name))
+                .Where(x => !string.Equals(x.kind, "software/virtual", StringComparison.OrdinalIgnoreCase))
+                .Where(x => !string.Equals(x.kind, "remote", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            return candidates
+                .OrderByDescending(AdapterStrengthTier)
+                .ThenByDescending(x => x.memoryMb)
+                .ThenByDescending(x => x.active)
+                .ThenByDescending(x => x.primary)
+                .ThenBy(x => x.name, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault()
+                ?? adapters.FirstOrDefault(x => x.active)
+                ?? adapters.FirstOrDefault();
+        }
+
+        private static AdapterInfo? FindAdapter(IEnumerable<AdapterInfo> adapters, string? adapterId)
+        {
+            if (string.IsNullOrWhiteSpace(adapterId)) return null;
+
+            AdapterInfo? exact = adapters.FirstOrDefault(item =>
+                string.Equals(item.id, adapterId, StringComparison.OrdinalIgnoreCase));
+            if (exact != null) return exact;
+
+            string normalized = NormalizeHardwareId(adapterId);
+            if (string.IsNullOrWhiteSpace(normalized)) return null;
+
+            return adapters.FirstOrDefault(item =>
+                string.Equals(NormalizeHardwareId(item.id), normalized, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(NormalizeHardwareId(item.deviceId), normalized, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string PreferenceForAdapter(AdapterInfo? adapter)
+        {
+            if (adapter == null) return "system";
+            if (string.Equals(adapter.kind, "discrete", StringComparison.OrdinalIgnoreCase)) return "high-performance";
+            if (string.Equals(adapter.kind, "integrated", StringComparison.OrdinalIgnoreCase)) return "power-saving";
+            if (string.Equals(adapter.kind, "software/virtual", StringComparison.OrdinalIgnoreCase)) return "software";
+            if (string.Equals(adapter.kind, "remote", StringComparison.OrdinalIgnoreCase)) return "system";
+            return "high-performance";
         }
 
         private static string NormalizePreference(string? preference)
