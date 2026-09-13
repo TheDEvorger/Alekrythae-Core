@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Alekrythae Cursor",
+  "version": "0.2.0",
+  "description": "Applies the Alekrythae lore cursor to the docked ChatGPT surface.",
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "css": ["cursor.css"],
+      "run_at": "document_start"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+:root {
+  --alekrythae-cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'%3E%3Cpath d='M4 3 27 15l-9 3-4 11Z' fill='%23051119' stroke='%237ce8ff' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='m11 9 9 6-7 2Z' fill='%23efd06d'/%3E%3Ccircle cx='27' cy='7' r='3' fill='%23051119' stroke='%23efd06d'/%3E%3C/svg%3E") 4 3, auto;
+  --alekrythae-cursor-action: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='34' viewBox='0 0 34 34'%3E%3Cpath d='M4 3 27 15l-9 3-4 11Z' fill='%23051119' stroke='%23efd06d' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='m11 9 9 6-7 2Z' fill='%237ce8ff'/%3E%3Ccircle cx='27' cy='7' r='3' fill='%23051119' stroke='%237ce8ff'/%3E%3C/svg%3E") 4 3, pointer;
+}
+
+html, body, body * { cursor: var(--alekrythae-cursor) !important; }
+a, button, [role="button"], input, textarea, select, label { cursor: var(--alekrythae-cursor-action) !important; }
