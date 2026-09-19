@@ -6,14 +6,14 @@
 
 **Ałek’ryŧhæ Core** is the Windows runtime layer behind the Ałek’ryŧhæ ecosystem: a self-contained host for `.alek` applications with portable data storage, sandboxed file access, GPU selection, media streaming, developer tooling, and version-safe data transfer.
 
-[![Version](https://img.shields.io/badge/version-v0.2.0-7c3aed?style=for-the-badge)](#release-status)
+[![Version](https://img.shields.io/badge/version-v2.0.0-7c3aed?style=for-the-badge)](#release-status)
 [![Core](https://img.shields.io/badge/core-R6-2563eb?style=for-the-badge)](#release-status)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](#requirements)
 [![SQLite](https://img.shields.io/badge/storage-SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](#portable-data-layer)
 [![Status](https://img.shields.io/badge/status-active%20development-16a34a?style=for-the-badge)](#roadmap)
 
-> **Current release:** `v0.2.0` · **Core revision:** `R6` · **Target:** `Windows x64`
+> **Current release:** `v2.0.0` · **Core revision:** `R6` · **Target:** `Windows x64`
 
 </div>
 
@@ -46,6 +46,7 @@ The project is intentionally built around one rule:
 | 🤖 **AI workspace dock** | Can visually dock a separate Chrome application-mode window into the AI workspace without reading browser DOM, cookies, passwords, or session tokens. |
 | 💤 **Runtime power management** | Reduces WebView2 memory/power pressure while the application is inactive. |
 | 🔁 **Backward compatibility** | R6 preserves the existing SQLite schema and established Core API namespaces used by earlier compatible data. |
+| 🌙 **ViodCera bridge** | Adds resident hotkeys, no-activate translation popups, live OCR region selection, local Windows OCR, and ViodCera window lifecycle APIs. |
 
 ---
 
@@ -81,6 +82,7 @@ The project is intentionally built around one rule:
 src/Alekrythae.Core/
 ├── Program.cs                  # Process lifecycle, .alek association, startup
 ├── CosmicGate.cs               # Main runtime window + WebView2/Core API bridge
+├── ViodCeraBridge.cs           # ViodCera hotkeys, OCR, translation popup + resident bridge
 ├── PortableGameStore.cs        # Portable SQLite persistence layer
 ├── DataTransferService.cs      # .alekdata import/export and migration
 ├── GraphicsBridge.cs           # GPU discovery and Windows graphics preference
@@ -197,11 +199,27 @@ The browser remains a separate process with its own profile. The docking layer i
 
 ---
 
+## ViodCera Runtime Support
+
+Core `v2.0.0` includes the ViodCera native bridge required by `Alekrythae-ViodCera.alek`. The bridge is activated only for the ViodCera application identity/file name and keeps normal `.alek` behavior unchanged.
+
+```text
+Ctrl + Q       selected-text translation
+Alt + Q        live OCR selection
+Space / Enter  confirm OCR region
+Esc            cancel OCR selection
+Ctrl + Wheel   application font scaling
+```
+
+The ViodCera host can remain resident while hidden so WebView2 stays warm for fast popup use. OCR selection is transparent and does not intentionally dim or freeze the screen.
+
+---
+
 ## Requirements
 
 ### Build environment
 
-- **Windows 10 version 1809 or later**
+- **Windows 10 version 2004 or later**
 - **Windows x64**
 - **.NET 10 SDK**
 - **Microsoft Edge WebView2 Runtime**
@@ -229,7 +247,7 @@ BUILD_CORE.cmd
 The script restores dependencies and publishes a self-contained Windows x64 release to:
 
 ```text
-release/Alekrythae-Core-v0.2.0-Windows-x64/
+release/Alekrythae-Core-v2.0.0-Windows-x64/
 ```
 
 Expected output includes:
@@ -286,16 +304,16 @@ app.exit
 
 ## Release Status
 
-### `v0.2.0` · R6
+### `v2.0.0` · R6
 
-R6 is the current Core revision shipped with `v0.2.0`.
+R6 is the current Core revision shipped with `v2.0.0`.
 
 Key characteristics include:
 
 - hardened shortcut blocking while modal/character/palette windows are active;
 - unique temporary files plus atomic replacement for write operations;
 - cleanup of failed temporary writes;
-- synchronized `v0.2.0` version metadata across the program, project, developer bridge, compatibility metadata, and build output;
+- synchronized `v2.0.0` version metadata across the program, project, developer bridge, compatibility metadata, and build output;
 - stable SQLite-backed portable storage and established bridge API namespaces.
 
 ---
@@ -322,9 +340,9 @@ Runtime-generated data, databases, caches, logs, backups, and local environment 
 The project separates the public release version from the Core architecture revision:
 
 ```text
-Release version : v0.2.0
+Release version : v2.0.0
 Core revision   : R6
-Display version : Ałek’ryŧhæ Core v0.2.0 (R6)
+Display version : Ałek’ryŧhæ Core v2.0.0 (R6)
 ```
 
 Release tags follow **Semantic Versioning** style (`vMAJOR.MINOR.PATCH`), while `R#` identifies the internal Core revision line.
@@ -341,6 +359,6 @@ Ałek’ryŧhæ Core is under active development. Current engineering priorities
 
 ### Ałek’ryŧhæ Core · Build worlds. Keep the runtime under control.
 
-`v0.2.0` · `R6` · `.NET 10` · `Windows x64`
+`v2.0.0` · `R6` · `.NET 10` · `Windows x64`
 
 </div>

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,8 +19,8 @@ namespace AlekrythaeCore
         private static Application? _app;
         private const string Extension = ".alek";
         private const string ProgId = "Alekrythae.Nexus.v0";
-        internal const string DisplayName = "Ałek’ryŧhæ Core v0.2.0 (R6)";
-        internal const string DisplayVersion = "0.2.0";
+        internal const string DisplayName = "Ałek’ryŧhæ Core v2.0.0 (R6)";
+        internal const string DisplayVersion = "2.0.0";
         // 'in ikinci açılış AI yaşam döngüsü eski Core tepside açık
         // olsa bile güncel süreçte çalışmalıdır. Ayrı pipe/mutex eski Core'a
         // yanlışlıkla yönlendirme yapılmasını engeller.
@@ -424,6 +425,13 @@ namespace AlekrythaeCore
             var exitItem = new ToolStripMenuItem("Core'dan Çık");
             exitItem.Click += (_, _) =>
             {
+                // Resident ViodCera penceresi görünmese bile aktif boyut sayılır.
+                // Core'dan açıkça çıkılırsa onu da temiz kapat.
+                foreach (var gate in _activeDimensions.Values.ToArray())
+                {
+                    if (gate.IsViodCeraApp) gate.ForceCloseViodCera();
+                }
+
                 if (_activeDimensions.Count > 0)
                 {
                     System.Windows.MessageBox.Show(
@@ -467,10 +475,17 @@ namespace AlekrythaeCore
 
                 if (_activeDimensions.TryGetValue(fullPath, out CosmicGate? existing))
                 {
-                    existing.WindowState = WindowState.Normal;
-                    existing.Show();
-                    existing.Activate();
-                    existing.Focus();
+                    if (existing.IsViodCeraApp)
+                    {
+                        existing.ShowViodCeraMain();
+                    }
+                    else
+                    {
+                        existing.WindowState = WindowState.Normal;
+                        existing.Show();
+                        existing.Activate();
+                        existing.Focus();
+                    }
                     return;
                 }
 

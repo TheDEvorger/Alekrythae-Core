@@ -12,7 +12,7 @@ using Microsoft.Win32.SafeHandles;
 namespace AlekrythaeCore
 {
     /// <summary>
-    /// Lightweight Windows ConPTY-backed terminal session. v0.2.0 / R6 compatibility-hardened.
+    /// Lightweight Windows ConPTY-backed terminal session. v2.0.0 / R6 compatibility-hardened.
     ///
     /// ConPTY uses UTF-8 streams and Unicode CreateProcessW, so paths such as
     /// "📜 Eïs Ųm Ałek’ryŧhæ" are not forced through the legacy OEM code page.

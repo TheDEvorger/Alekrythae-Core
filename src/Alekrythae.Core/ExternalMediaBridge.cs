@@ -87,7 +87,7 @@ namespace AlekrythaeCore.Media
                     return true;
 
                 case "probeExternalMedia":
-                    result = Probe(state, ReadString(payload, "path"));
+                    result = Probe(owner, state, ReadString(payload, "path"));
                     return true;
 
                 default:
@@ -163,7 +163,7 @@ namespace AlekrythaeCore.Media
             };
         }
 
-        private static object Probe(BridgeState state, string? candidatePath)
+        private static object Probe(Window owner, BridgeState state, string? candidatePath)
         {
             string path = NormalizeFullPath(candidatePath);
             if (!IsAllowedMediaPath(path))
@@ -187,7 +187,35 @@ namespace AlekrythaeCore.Media
                 };
             }
 
-            Approve(state, path);
+            // A legacy absolute path must never silently become an approved native-file
+            // capability. The picker already provides explicit consent; probe therefore
+            // asks once per Core session before granting access to a previously unknown path.
+            if (!IsApproved(state, path))
+            {
+                MessageBoxResult consent = MessageBox.Show(
+                    owner,
+                    "Bu .alek uygulaması eski bir kayıt içindeki harici medya dosyasına " +
+                    "erişmek istiyor:\n\n" + path +
+                    "\n\nBu dosyaya yalnızca bu Core oturumu için erişim verilsin mi?",
+                    "Ałek’ryŧhæ Harici Medya İzni",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No);
+
+                if (consent != MessageBoxResult.Yes)
+                {
+                    return new
+                    {
+                        ok = false,
+                        exists = true,
+                        path,
+                        error = "external_media_permission_denied"
+                    };
+                }
+
+                Approve(state, path);
+            }
+
             return new
             {
                 ok = true,

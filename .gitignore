@@ -234,6 +234,36 @@ setup-output/
 *.msixupload
 *.appxupload
 
+
+# ------------------------------------------------------------
+# Additional credential / signing / deployment safety
+# ------------------------------------------------------------
+.secrets/
+.credentials/
+credentials.json
+credentials.*.json
+client_secret*.json
+service-account*.json
+oauth*.json
+*.usersecrets
+*.publishsettings
+*.pubxml.user
+*.ppk
+*.kdbx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.asc
+*.gpg
+
+# Local GitHub / security scanner output
+.gitleaks-report*
+.trivy/
+.sonar/
+.sonarqube/
+.semgrep/
+
 # ------------------------------------------------------------
 # IMPORTANT: intentionally tracked project assets
 # ------------------------------------------------------------
@@ -244,3 +274,9 @@ setup-output/
 #   *.alek
 #   Resources/
 # They may contain real source/config/assets required by Core.
+
+# ------------------------------------------------------------
+# Alekrythae Core repository note
+# ------------------------------------------------------------
+# Keep source manifests, project assets, README/LICENSE/SECURITY,
+# .github workflows and Dependabot configuration tracked.

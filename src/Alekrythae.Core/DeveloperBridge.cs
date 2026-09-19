@@ -12,17 +12,23 @@ using Forms = System.Windows.Forms;
 namespace AlekrythaeCore
 {
     /// <summary>
-    /// Ałek’ryŧhæ Core v0.2.0 R6 developer bridge.
+    /// Ałek’ryŧhæ Core v2.0.0 R6 developer bridge.
     /// Only dev.* operations are handled here. Existing Core APIs remain untouched.
     /// </summary>
     internal sealed class DeveloperBridge : IDisposable
     {
-        private const string ApiVersion = "0.2.0-R6-CodeBridge2-atlas";
+        private const string ApiVersion = "2.0.0-R6-CodeBridge2-atlas";
 
         private readonly Dictionary<string, string> _workspaces =
             new(StringComparer.OrdinalIgnoreCase);
 
         private readonly ConcurrentDictionary<string, ConPtySession> _shells =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        // A workspace selection grants file access only. Starting an operating-system
+        // shell is a stronger capability and therefore requires a separate, explicit
+        // per-session user consent the first time that workspace requests a shell.
+        private readonly HashSet<string> _shellApprovedWorkspaces =
             new(StringComparer.OrdinalIgnoreCase);
 
         private CoreWebView2? _webView;
@@ -176,6 +182,7 @@ namespace AlekrythaeCore
                 return new { ok = false, error = "workspace_token_required" };
 
             bool removed = _workspaces.Remove(token);
+            _shellApprovedWorkspaces.Remove(token);
             return new { ok = true, released = removed };
         }
 
@@ -379,6 +386,23 @@ namespace AlekrythaeCore
             string workingDirectory = root.TrimEnd(
                 Path.DirectorySeparatorChar,
                 Path.AltDirectorySeparatorChar);
+
+            if (!_shellApprovedWorkspaces.Contains(token))
+            {
+                System.Windows.MessageBoxResult consent = System.Windows.MessageBox.Show(
+                    "Bu .alek uygulaması seçtiğiniz proje klasöründe Windows komut satırı " +
+                    "çalıştırmak istiyor.\n\n" + workingDirectory +
+                    "\n\nBu izin, bu çalışma alanı için yalnızca mevcut Core oturumunda geçerli olacaktır.",
+                    "Ałek’ryŧhæ Komut Satırı İzni",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Warning,
+                    System.Windows.MessageBoxResult.No);
+
+                if (consent != System.Windows.MessageBoxResult.Yes)
+                    return new { ok = false, error = "shell_permission_denied" };
+
+                _shellApprovedWorkspaces.Add(token);
+            }
 
             if (elevated)
             {
@@ -775,6 +799,7 @@ namespace AlekrythaeCore
 
             _shells.Clear();
             _workspaces.Clear();
+            _shellApprovedWorkspaces.Clear();
             _webView = null;
             _dispatcher = null;
         }

@@ -52,6 +52,8 @@ namespace AlekrythaeCore
         private bool _webViewZoomHooked;
         private int _safeAiZoomSyncGeneration;
         private bool _altSSystemCharacterHooked;
+        private ViodCeraBridge? _viodCeraBridge;
+        private readonly bool _isViodCeraApp;
         private const int WmSysChar = 0x0106;
 
         // Desteklenen dosya uzantıları
@@ -70,6 +72,7 @@ namespace AlekrythaeCore
             _dataTransferService = new DataTransferService(_rootFolder, this);
             _developerBridge = new DeveloperBridge();
             _startFullscreen = ReadAlekWindowCommand(jsPath);
+            _isViodCeraApp = IsViodCeraApplication(jsPath);
 
             try
             {
@@ -96,8 +99,8 @@ namespace AlekrythaeCore
 
             // 1. PENCERE ŞASESİ: Modern, Kenarlıksız ve Transparan
             this.Title = Program.DisplayName + " - " + Path.GetFileName(jsPath);
-            this.Width = 1024;
-            this.Height = 768;
+            this.Width = _isViodCeraApp ? 560 : 1024;
+            this.Height = _isViodCeraApp ? 430 : 768;
             this.WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
             // 2. ANA LAYOUT (Grid)
@@ -209,6 +212,16 @@ namespace AlekrythaeCore
                     // Chromium'un yerleşik yardım/accelerator davranışlarının tuşu yutmasını engelle.
                     try { _webView.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false; } catch { }
 
+                    // Security hardening: this WebView is an application surface, not a general browser.
+                    // Keep credentials/autofill and browser UI out of the trusted local app surface.
+                    try { _webView.CoreWebView2.Settings.IsPasswordAutosaveEnabled = false; } catch { }
+                    try { _webView.CoreWebView2.Settings.IsGeneralAutofillEnabled = false; } catch { }
+                    try { _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false; } catch { }
+                    try { _webView.CoreWebView2.Settings.IsStatusBarEnabled = false; } catch { }
+#if !DEBUG
+                    try { _webView.CoreWebView2.Settings.AreDevToolsEnabled = false; } catch { }
+#endif
+
                     // ====== VIRTUAL HOST MAPPING ======
                     string? alekFolder = Path.GetDirectoryName(Path.GetFullPath(_jsPath));
                     if (!string.IsNullOrEmpty(alekFolder))
@@ -236,6 +249,8 @@ namespace AlekrythaeCore
 
                     // ====== JS <-> C# KÖPRÜSÜ KURULUMU ======
                     _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
+                    _webView.CoreWebView2.NavigationStarting += OnNavigationStarting;
+                    _webView.CoreWebView2.NewWindowRequested += OnNewWindowRequested;
                     _webView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
                     _webView.CoreWebView2.ProcessFailed += OnProcessFailed;
 #if DEBUG
@@ -244,6 +259,10 @@ namespace AlekrythaeCore
                     // ========================================
 
                     FireUpJs();
+                    if (_isViodCeraApp && _viodCeraBridge == null)
+                    {
+                        _viodCeraBridge = new ViodCeraBridge(this, _webView, SendResponse, AppendWebLog);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -274,6 +293,20 @@ namespace AlekrythaeCore
 
                     if (isHiddenOrMinimized)
                     {
+                        // ViodCera is a resident translator. Keep Chromium warm while the
+                        // host window is hidden so global hotkeys can surface a popup instantly.
+                        if (_viodCeraBridge?.KeepWarm == true)
+                        {
+                            if (_webViewSuspended)
+                            {
+                                try { _webView.CoreWebView2.Resume(); } catch { }
+                                _webViewSuspended = false;
+                            }
+                            if (_webView.Visibility != Visibility.Hidden)
+                                _webView.Visibility = Visibility.Hidden;
+                            try { _webView.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
+                            continue;
+                        }
                         // WebView2, TrySuspendAsync çağrılırken görünür olmamalıdır.
                         // WPF Visibility değişikliği controller'ın IsVisible durumunu da
                         // kapatır. Aksi halde TrySuspendAsync ERROR_INVALID_STATE ile
@@ -515,6 +548,38 @@ namespace AlekrythaeCore
             AppendWebLog("exception: " + e.ParameterObjectAsJson);
         }
 
+        private static bool IsTrustedBridgeSource(string? source)
+        {
+            // FireUpJs uses NavigateToString. WebView2 documents that this document
+            // has about:blank as its location/origin. Native APIs must never be
+            // callable by a document reached through an external navigation.
+            return string.Equals(
+                source?.Trim(),
+                "about:blank",
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
+        {
+            string uri = e.Uri ?? string.Empty;
+            if (string.Equals(uri, "about:blank", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            // The embedded surface is deliberately not a browser. Blocking top-level
+            // navigation keeps the native file/database/shell bridge attached only to
+            // the locally generated Ałek application document.
+            e.Cancel = true;
+            AppendWebLog("blocked top-level navigation: " + uri);
+        }
+
+        private void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
+        {
+            // Prevent window.open / target=_blank from creating an untrusted browser
+            // surface inside the Core process. External browsing belongs outside Core.
+            e.Handled = true;
+            AppendWebLog("blocked new-window request: " + (e.Uri ?? string.Empty));
+        }
+
         private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
         {
             if (!e.IsSuccess)
@@ -576,6 +641,23 @@ namespace AlekrythaeCore
             _isWindowedFullscreen = false;
         }
 
+        private static bool IsViodCeraApplication(string jsPath)
+        {
+            try
+            {
+                string fileName = Path.GetFileNameWithoutExtension(jsPath);
+                if (string.Equals(fileName, "Alekrythae-ViodCera", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (!File.Exists(jsPath)) return false;
+                string head = string.Join("\n", File.ReadLines(jsPath).Take(120));
+                return Regex.IsMatch(head, "alek\\.app\\.id\\s*=\\s*[\'\"]alek\\.viodcera[\'\"]", RegexOptions.IgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static bool ReadAlekWindowCommand(string jsPath)
         {
             try
@@ -611,11 +693,67 @@ namespace AlekrythaeCore
                 if (!combined.StartsWith(_rootFolder, StringComparison.OrdinalIgnoreCase))
                     return null;
 
+                // A junction/symlink inside the application tree could otherwise turn a
+                // syntactically safe relative path into access outside the sandbox. Reject
+                // every existing reparse-point segment between the app root and target.
+                string rootNoSlash = _rootFolder.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                if (PathContainsReparsePoint(rootNoSlash, combined))
+                    return null;
+
                 return combined;
             }
             catch
             {
                 return null; // Geçersiz karakterler vs.
+            }
+        }
+
+        private static bool PathContainsReparsePoint(string root, string target)
+        {
+            try
+            {
+                string normalizedRoot = Path.GetFullPath(root).TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                string normalizedTarget = Path.GetFullPath(target);
+
+                if (HasReparsePoint(normalizedRoot))
+                    return true;
+
+                string relative = Path.GetRelativePath(normalizedRoot, normalizedTarget);
+                if (relative == ".")
+                    return false;
+
+                string current = normalizedRoot;
+                foreach (string part in relative.Split(
+                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                    StringSplitOptions.RemoveEmptyEntries))
+                {
+                    current = Path.Combine(current, part);
+                    if ((Directory.Exists(current) || File.Exists(current)) && HasReparsePoint(current))
+                        return true;
+                }
+
+                return false;
+            }
+            catch
+            {
+                // Fail closed if path inspection itself is unreliable.
+                return true;
+            }
+        }
+
+        private static bool HasReparsePoint(string path)
+        {
+            try
+            {
+                return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -765,6 +903,12 @@ namespace AlekrythaeCore
         {
             try
             {
+                if (!IsTrustedBridgeSource(e.Source))
+                {
+                    AppendWebLog("blocked web message from untrusted source: " + (e.Source ?? string.Empty));
+                    return;
+                }
+
                 string raw = GetWebMessagePayload(e);
                 using var doc = JsonDocument.Parse(raw);
                 if (!doc.RootElement.TryGetProperty("op", out var opEl)) return;
@@ -832,6 +976,9 @@ namespace AlekrythaeCore
         {
             try
             {
+                if (_viodCeraBridge != null && _viodCeraBridge.TryHandleApi(op, reqId, payload))
+                    return;
+
                 if (TryHandleSafeAiApi(op, reqId, payload))
                     return;
 
@@ -1655,6 +1802,27 @@ namespace AlekrythaeCore
                 .Replace("</", "<\\/");
         }
 
+
+        internal bool IsViodCeraApp => _isViodCeraApp;
+
+        internal void ShowViodCeraMain()
+        {
+            if (_viodCeraBridge != null) _viodCeraBridge.ShowMainWindow();
+            else
+            {
+                Show();
+                Activate();
+                Focus();
+            }
+        }
+
+        internal void ForceCloseViodCera()
+        {
+            try { _viodCeraBridge?.Dispose(); } catch { }
+            _viodCeraBridge = null;
+            try { Close(); } catch { }
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             _hostExitClosed = true;
@@ -1673,10 +1841,14 @@ namespace AlekrythaeCore
             catch { }
             _webViewZoomHooked = false;
             try { _webView.CoreWebView2.WebMessageReceived -= OnWebMessageReceived; } catch { }
+            try { _webView.CoreWebView2.NavigationStarting -= OnNavigationStarting; } catch { }
+            try { _webView.CoreWebView2.NewWindowRequested -= OnNewWindowRequested; } catch { }
             try { _webView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted; } catch { }
             try { _webView.CoreWebView2.ProcessFailed -= OnProcessFailed; } catch { }
             try { if (_consoleReceiver != null) _consoleReceiver.DevToolsProtocolEventReceived -= OnConsoleApiCalled; } catch { }
             try { if (_exceptionReceiver != null) _exceptionReceiver.DevToolsProtocolEventReceived -= OnRuntimeExceptionThrown; } catch { }
+            try { _viodCeraBridge?.Dispose(); } catch { }
+            _viodCeraBridge = null;
             try { _developerBridge.Dispose(); } catch { }
             try { _edgeChatGptDock.Dispose(); } catch { }
             _webView.Dispose();
