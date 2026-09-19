@@ -1,147 +1,477 @@
 <div align="center">
 
-# Ałek’ryŧhæ Core
+# 🌌 Ałek’ryŧhæ Core
 
-### Portable Windows runtime for `.alek` dimensions
+### **The native Windows runtime behind the `.alek` ecosystem**
 
-**Ałek’ryŧhæ Core** is the Windows runtime layer behind the Ałek’ryŧhæ ecosystem: a self-contained host for `.alek` applications with portable data storage, sandboxed file access, GPU selection, media streaming, developer tooling, and version-safe data transfer.
+A self-contained host for portable `.alek` applications, combining **WebView2**, **SQLite**, controlled native bridges, graphics selection, media access, developer tooling, data transfer, AI-window integration, and application lifecycle services behind one runtime boundary.
 
-[![Version](https://img.shields.io/badge/version-v2.0.0-7c3aed?style=for-the-badge)](#release-status)
-[![Core](https://img.shields.io/badge/core-R6-2563eb?style=for-the-badge)](#release-status)
-[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](#requirements)
-[![SQLite](https://img.shields.io/badge/storage-SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](#portable-data-layer)
-[![Status](https://img.shields.io/badge/status-active%20development-16a34a?style=for-the-badge)](#roadmap)
+<br>
 
-> **Current release:** `v2.0.0` · **Core revision:** `R6` · **Target:** `Windows x64`
+[![Release](https://img.shields.io/badge/release-v2.0.0-7c3aed?style=for-the-badge)](#-release-v200)
+[![Core Revision](https://img.shields.io/badge/core-R6-2563eb?style=for-the-badge)](#-versioning)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](#-requirements)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](#-requirements)
+[![WebView2](https://img.shields.io/badge/runtime-WebView2-0ea5e9?style=for-the-badge&logo=microsoftedge&logoColor=white)](#-runtime-model)
+[![SQLite](https://img.shields.io/badge/storage-SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](#-portable-data-layer)
+
+<br>
+
+> ## **One Core. Many `.alek` applications. One controlled native boundary.**
+
+**Application logic stays with the application.  
+Native Windows capabilities stay behind Core APIs.  
+Portable worlds stay close to the files that own them.**
+
+<br>
+
+[**Why Core**](#-why-core-exists) ·
+[**Architecture**](#-architecture) ·
+[**Capabilities**](#-capability-map) ·
+[**Portable Data**](#-portable-data-layer) ·
+[**ViodCera**](#-viodcera-runtime-support) ·
+[**Developer Bridge**](#-developer-bridge) ·
+[**Security Model**](#-trust-boundaries) ·
+[**Build**](#-build) ·
+[**API Surface**](#-core-api-surface) ·
+[**Release**](#-release-v200)
 
 </div>
 
 ---
 
-## Overview
+# ✦ The idea
 
-Ałek’ryŧhæ Core turns a `.alek` file into a desktop application surface while keeping its runtime data portable and close to the application itself.
+A `.alek` application can own its interface, assets, JavaScript, world logic, tools, lore, workflows, and user experience.
 
-The Core provides the native Windows-side services that an `.alek` application can call through a controlled bridge: filesystem operations, SQLite-backed game data, graphics preference management, external media access, import/export, developer workspace access, terminal sessions, and application lifecycle control.
+It should not have to become a Windows runtime at the same time.
 
-The project is intentionally built around one rule:
+**Ałek’ryŧhæ Core exists to separate those responsibilities.**
 
-> **Application content stays portable; native capabilities stay behind explicit Core APIs.**
-
----
-
-## Highlights
-
-| Capability | What it provides |
-| --- | --- |
-| 🌀 **`.alek` runtime** | Registers and launches `.alek` dimensions directly from Windows. |
-| 💾 **Portable SQLite storage** | Keeps registry and adventure data beside the `.alek` root instead of scattering game data through the user profile. |
-| 🧱 **Sandboxed filesystem bridge** | File operations are constrained to the active `.alek` root. |
-| ⚛️ **Atomic writes** | Text, JSON, binary, and memory writes use same-directory temporary files and atomic replacement to reduce partial-write risk. |
-| 🎮 **GPU preference bridge** | Detects graphics adapters and persists the selected Windows GPU preference. |
-| 🎞️ **External media bridge** | Imports and streams supported audio, video, and image formats without permanently storing arbitrary absolute source paths. |
-| 📦 **Portable data transfer** | Exports/imports `.alekdata` packages with SQLite snapshots, SHA-256 verification, compatibility handling, and rollback protection. |
-| 🛠️ **Developer bridge** | Workspace file access plus a Windows ConPTY-backed terminal for development workflows. |
-| 🤖 **AI workspace dock** | Can visually dock a separate Chrome application-mode window into the AI workspace without reading browser DOM, cookies, passwords, or session tokens. |
-| 💤 **Runtime power management** | Reduces WebView2 memory/power pressure while the application is inactive. |
-| 🔁 **Backward compatibility** | R6 preserves the existing SQLite schema and established Core API namespaces used by earlier compatible data. |
-| 🌙 **ViodCera bridge** | Adds resident hotkeys, no-activate translation popups, live OCR region selection, local Windows OCR, and ViodCera window lifecycle APIs. |
-
----
-
-## Architecture
+The application describes *what the experience is*.  
+Core provides the native services that experience may safely request.
 
 ```text
-                         ┌──────────────────────┐
-                         │      .alek app       │
-                         │  UI + application JS │
-                         └──────────┬───────────┘
-                                    │
-                            Core message bridge
-                                    │
-              ┌─────────────────────┴─────────────────────┐
-              │            Ałek’ryŧhæ Core R6             │
-              │                .NET 10 / WPF               │
-              └─────────────────────┬─────────────────────┘
-                                    │
-       ┌─────────────┬──────────────┼──────────────┬──────────────┐
-       │             │              │              │              │
-       ▼             ▼              ▼              ▼              ▼
-  Filesystem      SQLite       GPU / Graphics   Media        Developer
-   fs.* API       db.* API        Bridge         Bridge         Bridge
-       │             │              │              │              │
-       ▼             ▼              ▼              ▼              ▼
- Sandbox root   Data/ + Games/  Windows GPU    Media files   Workspace +
-                                preferences                   ConPTY shell
+┌───────────────────────────────────────────────────────────┐
+│                    .alek application                      │
+│                                                           │
+│   UI · JavaScript · assets · world logic · app behavior   │
+└────────────────────────────┬──────────────────────────────┘
+                             │
+                             │ controlled bridge
+                             ▼
+┌───────────────────────────────────────────────────────────┐
+│                    Ałek’ryŧhæ Core                         │
+│                                                           │
+│  Windows · WebView2 · SQLite · Files · GPU · Media · API  │
+└───────────────────────────────────────────────────────────┘
 ```
 
-### Core components
+The result is a runtime where portable application content and native platform responsibilities can evolve without being fused into one monolith.
+
+> **The `.alek` file is the doorway. Core is the machinery behind the door.**
+
+---
+
+# 🧭 Why Core exists
+
+Desktop applications eventually collide with native concerns.
+
+Even an application whose visible surface is built with web technology still needs answers to questions such as:
+
+- Where does persistent data live?
+- Who owns database creation and migration?
+- How are files read and written without exposing the whole machine?
+- How are interrupted writes handled?
+- How does an app select a GPU?
+- How does external media enter the application safely?
+- How can a development workspace use a real Windows terminal?
+- How does an application request a native exit?
+- How can an AI browser window be visually integrated without turning the application into a browser credential reader?
+- How can data travel between installations without blindly copying a live SQLite database?
+
+Core is the answer layer for those questions.
+
+Instead of making every `.alek` application reinvent platform code, Core centralizes the shared native responsibilities and exposes them through explicit bridges.
+
+---
+
+# ⚖️ The boundary
+
+| The `.alek` application owns | Ałek’ryŧhæ Core owns |
+|---|---|
+| User experience | Native host lifecycle |
+| UI and layout | WebView2 hosting |
+| JavaScript application logic | Controlled native bridge |
+| Assets and application resources | Root-scoped filesystem operations |
+| World / tool / workflow behavior | SQLite persistence services |
+| App-specific data model | Native data-transfer plumbing |
+| App-specific media usage | External-media approval and probing |
+| App-specific graphics UI | Windows GPU preference integration |
+| App-specific developer UX | Workspace and ConPTY services |
+| Exit/farewell experience | Final native process exit |
+| AI workspace presentation | External window coordination |
+
+This separation is intentional.
+
+Core should be powerful enough to host serious applications without gradually swallowing the applications themselves.
+
+---
+
+# ⚡ Capability map
+
+| Capability | What Core provides |
+|---|---|
+| 🌀 **`.alek` runtime** | Windows association and direct launch of `.alek` applications. |
+| 🪟 **WebView2 host** | Desktop application surface backed by Microsoft Edge WebView2. |
+| 🧱 **Root-scoped filesystem bridge** | File operations constrained around the active `.alek` root. |
+| 💾 **Portable SQLite layer** | Registry and Adventure databases stored beside the application ecosystem. |
+| ⚛️ **Atomic writes** | Same-directory temporary writes followed by atomic replacement on supported paths. |
+| 📦 **`.alekdata` transfer** | Snapshot-based export/import with SHA-256 verification and rollback protection. |
+| 🎮 **Graphics bridge** | Adapter discovery and persisted Windows graphics preference. |
+| 🎞️ **External-media bridge** | Controlled import/probing for supported audio, video, and image formats. |
+| 🛠️ **Developer bridge** | Workspace APIs plus Windows ConPTY-backed terminal sessions. |
+| 🤖 **AI workspace dock** | Visual coordination of a separate Chrome application-mode window. |
+| 🌙 **ViodCera bridge** | Resident hotkeys, OCR selection, translation-window support, and ViodCera lifecycle integration. |
+| 💤 **Runtime power management** | Reduced WebView2 pressure while the host is inactive. |
+| 🚪 **Lifecycle API** | Explicit application-to-host exit request through `app.exit`. |
+| 🔁 **R6 compatibility line** | Stable established API namespaces and portable storage behavior. |
+
+---
+
+# 🏛️ Architecture
+
+```mermaid
+flowchart TB
+    USER["👤 User"]
+    ALEK["🌌 .alek application<br/>UI · JS · Assets · App Logic"]
+    HOST["🪟 WebView2 Application Host"]
+    BRIDGE["🔌 Controlled Core Message Bridge"]
+    CORE["⚙️ Ałek’ryŧhæ Core v2.0.0 · R6"]
+
+    FS["🧱 Filesystem<br/>fs.*"]
+    DB["💾 Portable SQLite<br/>db.* · data.*"]
+    GPU["🎮 Graphics<br/>GPU preference"]
+    MEDIA["🎞️ External Media<br/>import · probe"]
+    DEV["🛠️ Developer<br/>workspace · ConPTY"]
+    AI["🤖 AI Workspace<br/>window coordination"]
+    VC["🌙 ViodCera<br/>OCR · hotkeys · popup"]
+    LIFE["🚪 Lifecycle<br/>app.exit"]
+
+    ROOT["📁 Active .alek root"]
+    STORES["🗃️ Data/ · Games/"]
+    WIN["🪟 Windows graphics settings"]
+    AMEDIA["🖼️ Adventure Media/"]
+    SHELL["⌨️ Windows terminal"]
+    CHROME["🌐 Separate Chrome app window"]
+
+    USER --> ALEK
+    ALEK --> HOST
+    HOST --> BRIDGE
+    BRIDGE --> CORE
+
+    CORE --> FS
+    CORE --> DB
+    CORE --> GPU
+    CORE --> MEDIA
+    CORE --> DEV
+    CORE --> AI
+    CORE --> VC
+    CORE --> LIFE
+
+    FS --> ROOT
+    DB --> STORES
+    GPU --> WIN
+    MEDIA --> AMEDIA
+    DEV --> SHELL
+    AI --> CHROME
+```
+
+The architectural center is not WebView2, SQLite, or WPF by itself.
+
+It is the **bridge contract** between portable application code and native services.
+
+---
+
+# 🌀 Runtime model
+
+The normal runtime flow is intentionally small from the user's point of view:
+
+```text
+Double-click a .alek file
+          │
+          ▼
+   Ałek’ryŧhæ Core
+          │
+          ▼
+Resolve application root
+          │
+          ▼
+Open WebView2 host
+          │
+          ▼
+Expose approved Core APIs
+          │
+          ▼
+Application becomes active
+```
+
+A `.alek` application can therefore behave like a desktop application while retaining a file-centered application identity.
+
+When Core itself is launched without a `.alek` argument, it performs its registration work and exits instead of remaining as an unnecessary idle launcher process.
+
+---
+
+# 🧬 Core components
 
 ```text
 src/Alekrythae.Core/
-├── Program.cs                  # Process lifecycle, .alek association, startup
-├── CosmicGate.cs               # Main runtime window + WebView2/Core API bridge
-├── ViodCeraBridge.cs           # ViodCera hotkeys, OCR, translation popup + resident bridge
-├── PortableGameStore.cs        # Portable SQLite persistence layer
-├── DataTransferService.cs      # .alekdata import/export and migration
-├── GraphicsBridge.cs           # GPU discovery and Windows graphics preference
-├── ExternalMediaBridge.cs      # Approved media import/streaming
-├── DeveloperBridge.cs          # Developer workspace and shell APIs
-├── ConPtySession.cs            # Native Windows pseudo-terminal session
-├── EdgeChatGptDock.cs          # External Chrome AI workspace docking
-├── CoreUninstaller.cs          # Core cleanup/uninstall workflow
-└── Resources/                  # Runtime icons, artwork, cursor extension
+│
+├── Program.cs
+│   └── process lifecycle, startup and .alek association
+│
+├── CosmicGate.cs
+│   └── primary runtime window and WebView2/Core message bridge
+│
+├── ViodCeraBridge.cs
+│   └── ViodCera resident behavior, hotkeys, OCR and popup bridge
+│
+├── PortableGameStore.cs
+│   └── portable SQLite persistence
+│
+├── DataTransferService.cs
+│   └── .alekdata export, import and migration
+│
+├── GraphicsBridge.cs
+│   └── adapter discovery and Windows graphics preference
+│
+├── ExternalMediaBridge.cs
+│   └── approved media selection, import and probing
+│
+├── DeveloperBridge.cs
+│   └── controlled development workspace operations
+│
+├── ConPtySession.cs
+│   └── native Windows pseudo-terminal integration
+│
+├── EdgeChatGptDock.cs
+│   └── external AI workspace window coordination
+│
+├── CoreUninstaller.cs
+│   └── cleanup / uninstall workflow
+│
+└── Resources/
+    └── icons, artwork and runtime resources
 ```
+
+Each component exists for a different native responsibility.
+
+The application should not need to know how those responsibilities are implemented internally. It should need only the bridge contract it is allowed to call.
 
 ---
 
-## Portable Data Layer
+# 💾 Portable Data Layer
 
-Ałek’ryŧhæ Core is designed to keep application data portable.
+Portability is not a slogan in Core. It is a storage decision.
+
+A typical `.alek` root can keep runtime state close to the application:
 
 ```text
 <alek-root>/
+│
+├── <dimension>.alek
+│
 ├── Data/
 │   └── meggy.db
+│
 ├── Games/
 │   └── <adventure>/
 │       ├── game.db
 │       └── Media/
-└── <dimension>.alek
+│
+└── application resources...
 ```
 
-`PortableGameStore` deliberately avoids writing game data into `AppData`, `Documents`, temporary folders, or other user-profile locations.
+`PortableGameStore` deliberately avoids making the main application/game state depend on unrelated user-profile storage such as:
 
-The Core currently exposes registry/game operations through the `db.*` namespace, including registry reads/writes, game creation, document reads/writes, existence checks, deletion, and rename operations.
+```text
+AppData/
+Documents/
+Temp/
+```
 
----
+That gives the ecosystem a much clearer ownership model:
 
-## Data Safety & Transfer
-
-R6 hardens write and transfer paths against corruption and unsafe imports.
-
-### Atomic filesystem writes
-
-`fs.writeText`, `fs.writeJson`, `fs.writeBinary`, and runtime memory writes use a unique temporary file in the destination directory followed by atomic replacement. Failed operations attempt to clean up their temporary files.
-
-### `.alekdata` packages
-
-The transfer layer can move user data between compatible installations while protecting the live store:
-
-- SQLite databases are exported from consistent snapshots rather than by blindly copying a live database file.
-- Package files are verified with **SHA-256**.
-- Import does not overwrite a conflicting adventure in place; conflicts are handled as separate copies.
-- An automatic rollback package is created before import.
-- Legacy JSON, SQLite, and older Meggy ZIP-style sources can be recognized by the migration layer.
+> **Application files belong to the application.  
+> Live world data belongs beside the world.**
 
 ---
 
-## Graphics
+## Why portable storage matters
 
-`GraphicsBridge` provides Windows-side graphics adapter discovery and preference management.
+### 📁 Predictable ownership
 
-Supported Core operations include:
+A developer can understand which data belongs to which application without reverse-engineering profile folders.
+
+### 🧳 Easier movement
+
+The application root retains meaning when copied, archived, moved, or inspected.
+
+### 🛟 Clearer recovery
+
+Backups and transfer tools can target known stores instead of hunting through unrelated machine state.
+
+### 🧬 Controlled migration
+
+Schema and application changes can be handled through explicit migration paths.
+
+---
+
+# 🗃️ SQLite persistence
+
+The Core database layer supports the persistent operations needed by compatible `.alek` applications.
+
+Established database behavior includes workflows for:
+
+```text
+registry reads / writes
+game creation
+document reads / writes
+existence checks
+deletion
+rename operations
+portable database storage
+```
+
+The application defines its own domain.
+
+Core provides the native persistence machinery beneath it.
+
+This distinction matters because JOA, ViodCera, and future `.alek` applications do not need to share the same product logic merely because they share the same host.
+
+---
+
+# 🛡️ Data Safety & Transfer
+
+Persistent worlds deserve safer write behavior than “copy the file and hope.”
+
+Core's R6 line strengthens storage and transfer around several principles.
+
+---
+
+## ⚛️ Atomic filesystem writes
+
+Supported write paths use a staged write pattern:
+
+```text
+application write request
+          │
+          ▼
+create unique temporary file
+          │
+          ▼
+write beside destination
+          │
+          ▼
+replace destination atomically
+          │
+          ▼
+clean temporary file
+```
+
+Current protected paths include supported:
+
+```text
+fs.writeText
+fs.writeJson
+fs.writeBinary
+runtime memory writes
+```
+
+If the temporary operation fails, Core attempts to clean up the temporary artifact.
+
+The goal is simple: reduce the probability that an interrupted operation leaves the destination half-written.
+
+---
+
+## 📦 `.alekdata` packages
+
+Core's transfer layer is designed to move compatible user data without treating a live database like an ordinary static document.
+
+Safeguards include:
+
+- export from a consistent SQLite snapshot,
+- **SHA-256** package verification,
+- conflict-aware Adventure import,
+- rollback package creation before import,
+- compatibility handling,
+- migration recognition for legacy JSON,
+- SQLite source recognition,
+- support for older Meggy ZIP-style sources.
+
+```text
+Live data
+   │
+   ├─ create consistent snapshot
+   │
+   ├─ package
+   │
+   ├─ hash / verify
+   │
+   └─ export
+          │
+          ▼
+      .alekdata
+          │
+          ▼
+   validate import
+          │
+   ├─ preserve rollback
+   ├─ resolve conflict
+   └─ activate compatible data
+```
+
+> **Move the world without gambling with the live world.**
+
+---
+
+# 🧱 Filesystem bridge
+
+A desktop runtime is only useful if applications can work with files.
+
+It is only trustworthy if “file access” does not automatically mean “the whole machine is yours.”
+
+Core's filesystem bridge is built around the active `.alek` root.
+
+The application requests supported operations through the bridge, and those operations are constrained to the runtime's application context.
+
+Conceptually:
+
+```text
+C:\
+├── Users\
+├── Windows\
+├── Other Projects\
+└── My Alek App\
+    ├── App.alek        ← active application
+    ├── Assets\         ← application-owned
+    ├── Data\           ← application-owned
+    └── Games\          ← application-owned
+```
+
+The intended application surface is the final subtree, not arbitrary machine-wide navigation.
+
+This boundary is part of the runtime architecture.
+
+---
+
+# 🎮 Graphics & GPU Preference
+
+Complex WebView2 applications can be visually demanding.
+
+`GraphicsBridge` gives `.alek` applications a native route to inspect and manage the Windows graphics preference without embedding Windows-specific graphics logic into every application.
+
+Supported operations include:
 
 ```text
 listGraphicsAdapters
@@ -150,30 +480,77 @@ getGraphicsPreference
 openWindowsGraphicsSettings
 ```
 
-The persisted preference is also used to build the WebView2 browser arguments used by the runtime.
+The persisted preference is also used when Core builds the WebView2 browser arguments for the runtime.
 
----
-
-## External Media
-
-The media bridge supports controlled import/probing of common formats, including:
+This gives the application a clean division:
 
 ```text
-Audio : MP3, M4A, AAC, WAV, OGG, OPUS, FLAC, WMA
-Video : MP4, WEBM, MOV
-Image : PNG, JPG/JPEG, WEBP, GIF, BMP, SVG, AVIF
-```
+Application
+    └─ asks for graphics preference
 
-Selected external paths are approved only for the import flow. Imported media is copied into the active adventure's `Media` directory; arbitrary original absolute paths are not intended to become permanent game-state references.
+Core
+    └─ understands Windows graphics preference
+```
 
 ---
 
-## Developer Bridge
+# 🎞️ External Media Bridge
 
-R6 includes a dedicated `dev.*` API surface for tooling without changing the established application APIs.
+A persistent application may need to work with media selected from outside its own root.
+
+Core handles that boundary through a controlled import/probe workflow.
+
+### Audio
+
+```text
+MP3 · M4A · AAC · WAV · OGG · OPUS · FLAC · WMA
+```
+
+### Video
+
+```text
+MP4 · WEBM · MOV
+```
+
+### Image
+
+```text
+PNG · JPG/JPEG · WEBP · GIF · BMP · SVG · AVIF
+```
+
+The intended lifecycle is:
+
+```text
+external user-selected file
+            │
+            ▼
+       Core approval
+            │
+            ▼
+       media probing
+            │
+            ▼
+ application-controlled import
+            │
+            ▼
+ Adventure / Media-owned copy
+```
+
+An original arbitrary absolute source path is not intended to become a permanent world-state dependency.
+
+That distinction keeps a portable Adventure from quietly depending on a random file that happened to exist elsewhere on one machine.
+
+---
+
+# 🛠️ Developer Bridge
+
+Core is not only a player/runtime host.
+
+R6 also exposes a dedicated `dev.*` surface for tooling and development workflows.
 
 ```text
 dev.status
+
 dev.workspace.pick
 dev.workspace.release
 dev.workspace.list
@@ -181,27 +558,99 @@ dev.workspace.readText
 dev.workspace.writeText
 dev.workspace.exists
 dev.workspace.mkdir
+
 dev.shell.start
 dev.shell.write
 dev.shell.resize
 dev.shell.stop
 ```
 
-Terminal sessions are backed by **Windows ConPTY**, use UTF-8 streams, and support Unicode Windows paths.
+---
+
+## ⌨️ Native terminal sessions
+
+Developer terminal sessions are backed by **Windows ConPTY**.
+
+They use UTF-8 streams and support Unicode Windows paths.
+
+That detail matters.
+
+Ałek’ryŧhæ projects are not required to pretend the world ends at plain ASCII filenames.
+
+```text
+Workspace
+   │
+   ├─ controlled file API
+   │
+   └─ ConPTY session
+          │
+          ├─ start
+          ├─ write
+          ├─ resize
+          └─ stop
+```
+
+The developer bridge is intentionally separate from the ordinary application APIs so tooling can evolve without casually widening every application's native surface.
 
 ---
 
-## AI Workspace Dock
+# 🤖 AI Workspace Dock
 
-The Core can dock a separate **Google Chrome application-mode window** into the application's AI workspace.
+Some `.alek` applications can visually integrate an external AI workspace.
 
-The browser remains a separate process with its own profile. The docking layer is designed for window positioning and lifecycle integration; it does **not** read the page DOM, cookies, passwords, network traffic, or browser session keys.
+Core does this by coordinating a separate **Google Chrome application-mode window**.
+
+The browser remains its own process with its own browser profile.
+
+Core's role is window integration:
+
+- position,
+- bounds,
+- visual docking,
+- lifecycle coordination.
+
+The bridge is not designed to read:
+
+```text
+page DOM
+browser cookies
+saved passwords
+network traffic
+browser session keys
+```
+
+That is a crucial boundary.
+
+> **Dock the window, not the user's browser identity.**
+
+Google Chrome is optional and is only needed by applications that use this external AI-window workflow.
 
 ---
 
-## ViodCera Runtime Support
+# 🌙 ViodCera Runtime Support
 
-Core `v2.0.0` includes the ViodCera native bridge required by `Alekrythae-ViodCera.alek`. The bridge is activated only for the ViodCera application identity/file name and keeps normal `.alek` behavior unchanged.
+Core v2.0.0 includes the native bridge required by **Alekrythae-ViodCera.alek**.
+
+The bridge is activated only for the ViodCera application identity/file name so ordinary `.alek` applications keep their normal behavior.
+
+ViodCera support brings a different kind of workload into the ecosystem: a resident translation/OCR utility that needs global interaction without behaving like a conventional foreground application.
+
+---
+
+## ViodCera native capabilities
+
+Core provides the native side required for:
+
+- resident hotkeys,
+- selected-text translation flow,
+- live OCR-region selection,
+- local Windows OCR integration,
+- no-activate translation popup behavior,
+- ViodCera window lifecycle,
+- application font scaling support,
+- hidden resident operation while keeping WebView2 warm.
+
+### Runtime controls
 
 ```text
 Ctrl + Q       selected-text translation
@@ -211,40 +660,281 @@ Esc            cancel OCR selection
 Ctrl + Wheel   application font scaling
 ```
 
-The ViodCera host can remain resident while hidden so WebView2 stays warm for fast popup use. OCR selection is transparent and does not intentionally dim or freeze the screen.
+The OCR selection surface is designed to remain transparent rather than intentionally dimming or freezing the screen.
+
+The ViodCera host can remain resident while hidden, allowing the WebView2 environment to stay warm for faster popup use.
 
 ---
 
-## Requirements
+## Why ViodCera lives behind Core
 
-### Build environment
+A browser UI alone cannot cleanly own global hotkeys, resident native window behavior, local Windows OCR, and no-activate popup coordination.
+
+That is exactly the kind of boundary Core exists to handle.
+
+```text
+ViodCera.alek
+     │
+     │ translation / OCR UI
+     ▼
+WebView2 application
+     │
+     │ ViodCera bridge
+     ▼
+Ałek’ryŧhæ Core
+     │
+     ├─ hotkeys
+     ├─ OCR selection
+     ├─ native window behavior
+     └─ lifecycle
+```
+
+ViodCera remains a `.alek` application.
+
+Core remains the native host.
+
+---
+
+# 🚪 Application Lifecycle
+
+Applications should not need to terminate the Core process through hacks.
+
+The established lifecycle surface includes:
+
+```text
+app.exit
+```
+
+That allows a `.alek` application to own the user-facing exit experience first.
+
+For example:
+
+```text
+user requests exit
+      │
+      ▼
+application confirmation
+      │
+      ├─ save / animation / farewell
+      │
+      ▼
+    app.exit
+      │
+      ▼
+Core closes native host
+```
+
+JOA's Blue Moon exit sequence is a good example of why this separation is useful: the application controls the experience, while Core controls the actual native process lifecycle.
+
+---
+
+# 💤 Runtime Power Management
+
+A desktop host should not behave as though every visual surface is foreground-critical forever.
+
+Core includes runtime behavior intended to reduce unnecessary WebView2 memory and power pressure while an application is inactive.
+
+The purpose is not to silently shut down application logic.
+
+It is to make the host more respectful of machine resources when full foreground pressure is unnecessary.
+
+---
+
+# 🔐 Trust Boundaries
+
+Core has access to native Windows capabilities.
+
+That makes the boundary design more important, not less.
+
+The runtime is built around explicit surfaces rather than a single “give the application everything” switch.
+
+---
+
+## Files
+
+Application file operations are scoped around the active `.alek` root.
+
+## Media
+
+External paths enter through a deliberate selection/import flow.
+
+## Browser / AI workspace
+
+The docking layer coordinates an external browser window but is not designed as a DOM, cookie, password, traffic, or session-token extractor.
+
+## Data transfer
+
+Imports are validated, conflict handling exists, and rollback protection is part of the transfer workflow.
+
+## Developer tools
+
+Development workspace and terminal behavior live in the dedicated `dev.*` surface rather than being silently exposed as ordinary application APIs.
+
+---
+
+# 🧪 Runtime contract mindset
+
+Core should be treated as a host contract.
+
+A compatible application should depend on documented bridge behavior, not on accidental implementation details inside Core.
+
+That means a `.alek` application should prefer:
+
+```text
+documented Core operation
+```
+
+over:
+
+```text
+assumption about Core internals
+```
+
+This is what lets the runtime evolve without requiring every application to be rewritten whenever implementation details change.
+
+---
+
+# 🔌 Core API Surface
+
+The established R6 API families include:
+
+```text
+fs.*
+db.*
+data.*
+
+Graphics / GPU operations
+External media operations
+AI operations
+
+dev.*
+
+app.exit
+```
+
+Individual applications may use only part of that surface.
+
+---
+
+## Example: JOA integration surface
+
+Ałek’ryŧhæ · Meggy JOA uses Core services including:
+
+```text
+app.exit
+
+fs.readText
+
+listGraphicsAdapters
+setGraphicsPreference
+
+pickExternalMedia
+probeExternalMedia
+
+safeAi.open
+safeAi.bounds
+safeAi.close
+```
+
+This is the intended ecosystem pattern.
+
+JOA does not need to *become* Core.
+
+Core does not need to *become* JOA.
+
+---
+
+# 🌌 Ecosystem
+
+Ałek’ryŧhæ Core is designed as common infrastructure beneath multiple `.alek` applications.
+
+```mermaid
+flowchart TD
+    CORE["🌌 Ałek’ryŧhæ Core<br/>v2.0.0 · R6"]
+
+    JOA["🗺️ Meggy JOA<br/>persistent adventure workspace"]
+    VIOD["🔤 ViodCera<br/>translation + OCR overlay"]
+    FUTURE1["🧩 Future .alek tool"]
+    FUTURE2["🌠 Future .alek world"]
+
+    CORE --> JOA
+    CORE --> VIOD
+    CORE --> FUTURE1
+    CORE --> FUTURE2
+```
+
+The runtime is shared.
+
+The identities of the applications are not.
+
+That is the point.
+
+---
+
+# 🧪 JOA Runtime Target
+
+Core v2.0.0 is the target runtime for:
+
+> **Ałek’ryŧhæ · Meggy JOA v1.0.0**
+
+JOA uses Core as its native foundation for portable storage, filesystem access, graphics integration, media workflows, SafeAI window coordination, and host lifecycle behavior.
+
+The two projects have deliberately different responsibilities:
+
+| JOA | Core |
+|---|---|
+| Adventure/world application | Native runtime |
+| Mevcudat | Filesystem bridge |
+| Map and travel | Portable SQLite |
+| Character systems | Graphics preference |
+| Tavern | Media bridge |
+| Cartography | SafeAI/window integration |
+| App-specific persistence model | Native persistence services |
+| Blue Moon exit UX | `app.exit` host closure |
+
+This division keeps both projects easier to reason about.
+
+---
+
+# 🪟 Requirements
+
+## Runtime
 
 - **Windows 10 version 2004 or later**
+- **Windows x64**
+- **Microsoft Edge WebView2 Runtime**
+
+Google Chrome is only required for the optional external AI workspace docking workflow.
+
+---
+
+## Build environment
+
 - **Windows x64**
 - **.NET 10 SDK**
 - **Microsoft Edge WebView2 Runtime**
 
-Google Chrome is only needed for the optional external AI workspace docking feature.
+---
 
-### Main dependencies
+# 📚 Main dependencies
 
-| Package | Version |
-| --- | ---: |
-| `Microsoft.Data.Sqlite` | `10.0.10` |
-| `SQLitePCLRaw.bundle_e_sqlite3` | `2.1.12` |
-| `Microsoft.Web.WebView2` | `1.0.3912.50` |
+| Package | Version | Role |
+|---|---:|---|
+| `Microsoft.Data.Sqlite` | `10.0.10` | Managed SQLite access |
+| `SQLitePCLRaw.bundle_e_sqlite3` | `2.1.12` | SQLite native bundle |
+| `Microsoft.Web.WebView2` | `1.0.3912.50` | Embedded application runtime |
 
 ---
 
-## Build
+# 🔨 Build
 
-Clone the repository and run the supplied build script from the repository root:
+Clone the repository and run the supplied release build from the repository root:
 
 ```bat
 BUILD_CORE.cmd
 ```
 
-The script restores dependencies and publishes a self-contained Windows x64 release to:
+The build restores required dependencies and publishes a self-contained Windows x64 release to:
 
 ```text
 release/Alekrythae-Core-v2.0.0-Windows-x64/
@@ -258,7 +948,7 @@ Alekrythae Core.runtimeconfig.json
 Alekrythae Core.deps.json
 ```
 
-For the source-level performance patch verification followed by a normal build:
+For source-level performance verification followed by the normal build:
 
 ```bat
 BUILD_CORE_PERF.cmd
@@ -266,78 +956,93 @@ BUILD_CORE_PERF.cmd
 
 ---
 
-## Run
+# ▶️ Run
 
-Ałek’ryŧhæ Core associates itself with the `.alek` extension for the current Windows user.
-
-The normal runtime flow is simply:
+Once Core has registered the `.alek` association, the normal user flow is simply:
 
 ```text
-Double-click a .alek file
-        ↓
+<application>.alek
+      │
+      │ double click
+      ▼
 Ałek’ryŧhæ Core
-        ↓
-Dimension opens in its isolated root
+      │
+      ▼
+application root resolved
+      │
+      ▼
+application opens
 ```
 
-Launching the Core without a `.alek` argument performs its registration work and exits rather than remaining idle in the background.
+No permanent launcher needs to sit idle in the background simply to wait for an `.alek` file.
 
 ---
 
-## Core API Surface
-
-R6 preserves the established API families used by compatible `.alek` applications:
-
-```text
-fs.*
-db.*
-data.*
-Graphics / GPU operations
-External media operations
-AI operations
-dev.*
-app.exit
-```
-
-
----
-
-## Release Status
-
-### `v2.0.0` · R6
-
-R6 is the current Core revision shipped with `v2.0.0`.
-
-Key characteristics include:
-
-- hardened shortcut blocking while modal/character/palette windows are active;
-- unique temporary files plus atomic replacement for write operations;
-- cleanup of failed temporary writes;
-- synchronized `v2.0.0` version metadata across the program, project, developer bridge, compatibility metadata, and build output;
-- stable SQLite-backed portable storage and established bridge API namespaces.
-
----
-
-## Repository Layout
+# 🗂️ Repository Layout
 
 ```text
 .
+│
 ├── src/
-│   └── Alekrythae.Core/        # Core source code
-├── Alekrythae.sln              # Visual Studio solution
-├── BUILD_CORE.cmd              # Release build
-├── BUILD_CORE_PERF.cmd         # Performance patch check + release build
-├── VERSION                     # Current SemVer version
-└── .gitignore                  # Repository hygiene / runtime-data exclusions
+│   └── Alekrythae.Core/
+│       ├── Program.cs
+│       ├── CosmicGate.cs
+│       ├── ViodCeraBridge.cs
+│       ├── PortableGameStore.cs
+│       ├── DataTransferService.cs
+│       ├── GraphicsBridge.cs
+│       ├── ExternalMediaBridge.cs
+│       ├── DeveloperBridge.cs
+│       ├── ConPtySession.cs
+│       ├── EdgeChatGptDock.cs
+│       ├── CoreUninstaller.cs
+│       └── Resources/
+│
+├── Alekrythae.sln
+│
+├── BUILD_CORE.cmd
+├── BUILD_CORE_PERF.cmd
+│
+├── VERSION
+└── .gitignore
 ```
 
-Runtime-generated data, databases, caches, logs, backups, and local environment secrets are intentionally excluded from Git by the repository `.gitignore`.
+Runtime-generated material is intended to stay out of source control.
+
+That includes machine-local data such as databases, caches, temporary files, logs, backups, and private environment material.
 
 ---
 
-## Versioning
+# 🧹 Repository Hygiene
 
-The project separates the public release version from the Core architecture revision:
+A runtime repository should not become a scrapbook of machine-local state.
+
+Keep material such as the following out of source control:
+
+```text
+.env
+private keys
+credential files
+browser profiles
+session tokens
+
+runtime databases
+WAL / SHM state
+temporary exports
+logs
+build caches
+machine-local paths
+```
+
+Source code, runtime contracts, and intentional resources belong in the repository.
+
+User state does not.
+
+---
+
+# 🧬 Versioning
+
+Ałek’ryŧhæ Core separates **public release identity** from the **internal Core revision line**.
 
 ```text
 Release version : v2.0.0
@@ -345,20 +1050,243 @@ Core revision   : R6
 Display version : Ałek’ryŧhæ Core v2.0.0 (R6)
 ```
 
-Release tags follow **Semantic Versioning** style (`vMAJOR.MINOR.PATCH`), while `R#` identifies the internal Core revision line.
+Public releases follow Semantic Versioning-style tags:
+
+```text
+vMAJOR.MINOR.PATCH
+```
+
+Internal Core architecture lineage uses:
+
+```text
+R#
+```
+
+The two values answer different questions.
+
+**v2.0.0** tells users which public release they have.
+
+**R6** identifies the underlying Core revision lineage.
 
 ---
 
-## Roadmap
+# 🏁 Release · v2.0.0
 
-Ałek’ryŧhæ Core is under active development. Current engineering priorities include runtime hardening, portability, graphics efficiency, developer tooling, and continued evolution of the application/runtime boundary without breaking existing user data.
+Ałek’ryŧhæ Core **v2.0.0** is the current public release of the R6 runtime line.
+
+It brings the established Core architecture together as the native foundation for the modern `.alek` ecosystem.
+
+### Core runtime foundations
+
+- `.alek` file association and launch flow
+- WebView2 desktop host
+- root-scoped filesystem bridge
+- portable SQLite persistence
+- atomic write protection
+- `.alekdata` transfer safeguards
+- graphics-adapter discovery
+- Windows graphics preference integration
+- external media import/probing
+- developer workspace bridge
+- Windows ConPTY terminal integration
+- external AI workspace docking
+- runtime power-management behavior
+- native lifecycle APIs
+
+### v2.0.0 ecosystem support
+
+- **Ałek’ryŧhæ · Meggy JOA v1.0.0** target runtime
+- **ViodCera** native hotkey/OCR/window bridge
+- stable R6 compatibility lineage
+- synchronized `v2.0.0` release identity across the current Core line
+
+---
+
+# 🧭 Design Philosophy
+
+## 1 · Native power should have a boundary
+
+Running on desktop should not mean application code receives unrestricted machine access by default.
+
+---
+
+## 2 · Portable data should actually be portable
+
+A world is not portable when its important state is invisibly scattered across unrelated profile folders.
+
+---
+
+## 3 · Safety belongs below the application
+
+Atomic writes, controlled import, scoped paths, and native lifecycle behavior are stronger when the host enforces them consistently.
+
+---
+
+## 4 · Core should not become every application
+
+JOA should remain JOA.
+
+ViodCera should remain ViodCera.
+
+Future `.alek` applications should be free to develop their own identity.
+
+Core exists to give them native capabilities without absorbing them.
+
+---
+
+## 5 · Compatibility is part of the product
+
+A runtime becomes useful when applications can rely on its contracts.
+
+Stable namespaces and clear boundaries matter as much as features.
+
+---
+
+## 6 · Native complexity should be paid once
+
+If ten `.alek` applications require the same Windows capability, the ecosystem should not need ten unrelated implementations of that capability.
+
+Core is where shared native complexity belongs.
+
+---
+
+# ❓ FAQ
+
+<details>
+<summary><strong>What exactly is a <code>.alek</code> application?</strong></summary>
+
+A `.alek` application is an application package/entry point hosted by Ałek’ryŧhæ Core. The application owns its UI, JavaScript, assets, behavior, and domain logic, while Core provides the approved native Windows services it needs.
+
+</details>
+
+<details>
+<summary><strong>Is Ałek’ryŧhæ Core itself JOA?</strong></summary>
+
+No. JOA is one `.alek` application in the ecosystem. Core is the runtime beneath it.
+
+</details>
+
+<details>
+<summary><strong>Is ViodCera built into every application?</strong></summary>
+
+No. Core contains ViodCera-specific native bridge support, but that bridge is activated only for the ViodCera application identity/file name. Normal `.alek` behavior remains unchanged.
+
+</details>
+
+<details>
+<summary><strong>Where does application data live?</strong></summary>
+
+The portable model keeps runtime stores such as `Data/` and `Games/` beside the active `.alek` root rather than making application state depend on unrelated profile directories.
+
+</details>
+
+<details>
+<summary><strong>Does the AI workspace dock read browser passwords or cookies?</strong></summary>
+
+The docking layer is designed for window placement and lifecycle integration. It is not designed to read page DOM, cookies, passwords, network traffic, or browser session keys.
+
+</details>
+
+<details>
+<summary><strong>Why use SQLite?</strong></summary>
+
+SQLite gives compatible `.alek` applications a compact local persistent store while fitting Core's portable-file model.
+
+</details>
+
+<details>
+<summary><strong>Does an application get unrestricted access to Windows files?</strong></summary>
+
+The Core filesystem bridge is designed around the active `.alek` root rather than an unrestricted machine-wide filesystem surface.
+
+</details>
+
+<details>
+<summary><strong>Why is there both v2.0.0 and R6?</strong></summary>
+
+`v2.0.0` is the public release identity. `R6` identifies the internal Core revision lineage.
+
+</details>
+
+<details>
+<summary><strong>What happens when Core is opened without a .alek file?</strong></summary>
+
+Core performs its registration work and exits instead of remaining as an idle background launcher.
+
+</details>
+
+<details>
+<summary><strong>Can developer tools use a real terminal?</strong></summary>
+
+Yes. The developer bridge provides terminal sessions backed by Windows ConPTY with UTF-8 streams and Unicode-path support.
+
+</details>
+
+---
+
+# 🌠 The ecosystem direction
+
+Ałek’ryŧhæ Core is not intended to end as a launcher for one project.
+
+Its architecture points toward an ecosystem where specialized applications can share a reliable native foundation:
+
+```text
+                         🌌
+                 Ałek’ryŧhæ Core
+                      v2.0.0
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+      Meggy JOA       ViodCera      Future .alek
+       worlds        translation       tools
+          │              │              │
+          └──────────────┼──────────────┘
+                         │
+               controlled native APIs
+                         │
+             portable application roots
+```
+
+The applications can change.
+
+The worlds can change.
+
+The interfaces can change.
+
+The native boundary remains something they can build upon.
 
 ---
 
 <div align="center">
 
-### Ałek’ryŧhæ Core · Build worlds. Keep the runtime under control.
+<br>
 
-`v2.0.0` · `R6` · `.NET 10` · `Windows x64`
+# 🌙 Ałek’ryŧhæ Core
+
+### **Build the experience in `.alek`. Keep the native machinery in Core.**
+
+<br>
+
+`v2.0.0` · `R6` · `.NET 10` · `WPF` · `WebView2` · `SQLite` · `Windows x64`
+
+<br>
+
+### **One Core. Many `.alek` applications. One evolving software ecosystem.**
+
+
 
 </div>
+
+
+---
+
+© 2026 TheDEvorger. All rights reserved.
+
+Ałek’ryŧhæ, Ałek’ryŧhæ Core, `.alek`, and related project names, software components, documentation, visual identity, and original ecosystem concepts are part of the Ałek’ryŧhæ project.
+
+Unauthorized copying, redistribution, modification, republication, or commercial use of this software and its documentation is prohibited except where explicitly permitted by the repository license.
+
+For licensing and legal inquiries:
+
+**thedevorger.alekrythae.dev@gmail.com**
