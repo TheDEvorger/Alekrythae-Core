@@ -9,6 +9,7 @@ A self-contained host for portable `.alek` applications, combining **WebView2**,
 <br>
 
 [![Release](https://img.shields.io/badge/release-v2.0.0-7c3aed?style=for-the-badge)](#-release-v200)
+[![Core CI](https://github.com/TheDEvorger/Alekrythae-Core/actions/workflows/build.yml/badge.svg)](https://github.com/TheDEvorger/Alekrythae-Core/actions/workflows/build.yml)
 [![Core Revision](https://img.shields.io/badge/core-R6-2563eb?style=for-the-badge)](#-versioning)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white)](#-requirements)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](#-requirements)
@@ -920,9 +921,34 @@ Google Chrome is only required for the optional external AI workspace docking wo
 
 | Package | Version | Role |
 |---|---:|---|
-| `Microsoft.Data.Sqlite` | `10.0.10` | Managed SQLite access |
-| `SQLitePCLRaw.bundle_e_sqlite3` | `2.1.12` | SQLite native bundle |
-| `Microsoft.Web.WebView2` | `1.0.3912.50` | Embedded application runtime |
+| `Microsoft.Data.Sqlite` | `10.0.12` | Managed SQLite access |
+| `SQLitePCLRaw.bundle_e_sqlite3` | `2.1.13` | SQLite native bundle |
+| `Microsoft.Web.WebView2` | `1.0.4191.47` | Embedded application runtime |
+
+---
+
+# 🧪 Tests and CI
+
+The repository includes an MSTest project for Core behavior and portable SQLite persistence.
+
+Run the full test suite from the repository root:
+
+```powershell
+dotnet test Alekrythae.sln --configuration Release
+```
+
+GitHub Actions automatically restores, builds, and tests the solution on Windows with .NET 10 for pushes, pull requests, and manual runs. The CI run also collects Cobertura-compatible coverage data and publishes the test results as a short-lived workflow artifact.
+
+Current automated checks cover, among other things:
+
+- unsupported bridge-operation contracts
+- registry and game database schema creation
+- game metadata upsert behavior
+- portable media-folder creation
+- document write/read/exists round trips
+- document-history preservation on updates
+- game rename/delete behavior
+- Windows reserved-name and document-key validation
 
 ---
 
@@ -983,6 +1009,11 @@ No permanent launcher needs to sit idle in the background simply to wait for an 
 ```text
 .
 │
+├── .github/
+│   ├── workflows/
+│   │   └── build.yml
+│   └── dependabot.yml
+│
 ├── src/
 │   └── Alekrythae.Core/
 │       ├── Program.cs
@@ -998,11 +1029,20 @@ No permanent launcher needs to sit idle in the background simply to wait for an 
 │       ├── CoreUninstaller.cs
 │       └── Resources/
 │
-├── Alekrythae.sln
+├── tests/
+│   └── Alekrythae.Core.Tests/
+│       ├── DataTransferServiceTests.cs
+│       ├── PortableGameStoreSchemaTests.cs
+│       ├── PortableGameStoreDocumentTests.cs
+│       ├── PortableGameStoreLifecycleTests.cs
+│       ├── PortableGameStoreTestSupport.cs
+│       └── TestInfrastructureTests.cs
 │
+├── Alekrythae.sln
 ├── BUILD_CORE.cmd
 ├── BUILD_CORE_PERF.cmd
-│
+├── LICENSE
+├── SECURITY.md
 ├── VERSION
 └── .gitignore
 ```
@@ -1221,6 +1261,14 @@ Core performs its registration work and exits instead of remaining as an idle ba
 Yes. The developer bridge provides terminal sessions backed by Windows ConPTY with UTF-8 streams and Unicode-path support.
 
 </details>
+
+---
+
+# 📜 License
+
+Ałek’ryŧhæ Core is proprietary source-available software. The repository does not grant an open-source license. See [`LICENSE`](LICENSE) for the repository terms. Third-party components remain subject to their own licenses.
+
+For licensing or commercial-use permission, contact **thedevorger.alekrythae.dev@gmail.com**.
 
 ---
 

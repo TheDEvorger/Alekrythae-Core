@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Alekrythae.Core", "src\Alekrythae.Core\Alekrythae.Core.csproj", "{34A92F30-D776-4CC2-A9F0-F49CD8D173E4}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Alekrythae.Core.Tests", "tests\Alekrythae.Core.Tests\Alekrythae.Core.Tests.csproj", "{77E6AD3B-6DB4-4E9C-9B01-33D2150D18F2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,5 +16,9 @@ Global
 		{34A92F30-D776-4CC2-A9F0-F49CD8D173E4}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{34A92F30-D776-4CC2-A9F0-F49CD8D173E4}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{34A92F30-D776-4CC2-A9F0-F49CD8D173E4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{77E6AD3B-6DB4-4E9C-9B01-33D2150D18F2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{77E6AD3B-6DB4-4E9C-9B01-33D2150D18F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{77E6AD3B-6DB4-4E9C-9B01-33D2150D18F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{77E6AD3B-6DB4-4E9C-9B01-33D2150D18F2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

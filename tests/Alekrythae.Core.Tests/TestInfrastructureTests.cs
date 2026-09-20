@@ -1,13 +1,27 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System.Text.Json;
 
-namespace Alekrythae.Core.Tests;
+namespace AlekrythaeCore.Tests;
 
 [TestClass]
-public sealed class TestInfrastructureTests
+public sealed class PortableGameStoreApiContractTests
 {
     [TestMethod]
-    public void TestRunner_ShouldRunSuccessfully()
+    public void TryHandleApi_UnknownOperation_ReturnsUnsupportedOperation()
     {
-        Assert.IsTrue(true);
+        var store = new PortableGameStore(System.IO.Path.GetTempPath());
+
+        bool handled = store.TryHandleApi(
+            "unknown.operation",
+            default,
+            out object result);
+
+        Assert.IsFalse(handled);
+
+        JsonElement json = JsonSerializer.SerializeToElement(result);
+        Assert.IsFalse(json.GetProperty("ok").GetBoolean());
+        Assert.AreEqual(
+            "unsupported_portable_db_operation",
+            json.GetProperty("error").GetString());
     }
 }

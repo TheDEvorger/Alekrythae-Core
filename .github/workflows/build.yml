@@ -1,4 +1,4 @@
-name: Core Build
+name: Core CI
 
 on:
   push:
@@ -8,13 +8,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: core-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  build-and-test:
     runs-on: windows-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -24,8 +31,23 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore Alekrythae.sln
 
-      - name: Build Core
+      - name: Build solution
         run: dotnet build Alekrythae.sln --configuration Release --no-restore
 
-      - name: Run tests
-        run: dotnet test tests/Alekrythae.Core.Tests/Alekrythae.Core.Tests.csproj --configuration Release
+      - name: Run tests with coverage
+        run: >-
+          dotnet test tests/Alekrythae.Core.Tests/Alekrythae.Core.Tests.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=core-tests.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-test-results
+          path: TestResults/
+          if-no-files-found: warn
+          retention-days: 7
