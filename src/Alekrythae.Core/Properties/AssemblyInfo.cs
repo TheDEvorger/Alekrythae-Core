@@ -1,3 +1,2 @@
 using System.Runtime.CompilerServices;
-
-[assembly: InternalsVisibleTo("Alekrythae.Core.Tests")]
+[assembly: InternalsVisibleTo("Core.Compatibility")]

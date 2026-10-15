@@ -31,6 +31,11 @@ namespace AlekrythaeCore
         private readonly HashSet<string> _shellApprovedWorkspaces =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // Bind each native terminal to the workspace that authorized it.
+        // Releasing a workspace also revokes its live terminal sessions.
+        private readonly ConcurrentDictionary<string, string> _shellWorkspaces =
+            new(StringComparer.OrdinalIgnoreCase);
+
         private CoreWebView2? _webView;
         private Dispatcher? _dispatcher;
         private bool _disposed;
@@ -183,7 +188,19 @@ namespace AlekrythaeCore
 
             bool removed = _workspaces.Remove(token);
             _shellApprovedWorkspaces.Remove(token);
-            return new { ok = true, released = removed };
+            int stopped = 0;
+            foreach (KeyValuePair<string, string> binding in _shellWorkspaces.ToArray())
+            {
+                if (!string.Equals(binding.Value, token, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                _shellWorkspaces.TryRemove(binding.Key, out _);
+                if (_shells.TryRemove(binding.Key, out ConPtySession? session))
+                {
+                    try { session.Dispose(); } catch { }
+                    stopped++;
+                }
+            }
+            return new { ok = true, released = removed, stoppedShells = stopped };
         }
 
         private object ListWorkspace(JsonElement payload)
@@ -387,12 +404,21 @@ namespace AlekrythaeCore
                 Path.DirectorySeparatorChar,
                 Path.AltDirectorySeparatorChar);
 
+            // Workspace contents can change after selection (for example, a junction
+            // can be inserted). Revalidate the native shell's starting directory.
+            if (!Directory.Exists(workingDirectory))
+                return new { ok = false, error = "workspace_not_found" };
+            if (PathContainsReparsePoint(workingDirectory, workingDirectory))
+                return new { ok = false, error = "workspace_reparse_point_denied" };
+
             if (!_shellApprovedWorkspaces.Contains(token))
             {
                 System.Windows.MessageBoxResult consent = System.Windows.MessageBox.Show(
-                    "Bu .alek uygulaması seçtiğiniz proje klasöründe Windows komut satırı " +
-                    "çalıştırmak istiyor.\n\n" + workingDirectory +
-                    "\n\nBu izin, bu çalışma alanı için yalnızca mevcut Core oturumunda geçerli olacaktır.",
+                    "Bu .alek uygulaması Windows komut satırı çalıştırmak istiyor.\n\n" +
+                    workingDirectory +
+                    "\n\nÖNEMLİ: Terminal bir güvenlik sandbox'ında değildir; " +
+                    "komutlar Windows kullanıcı hesabınızın yetkileriyle çalışır. " +
+                    "Bu onay yalnızca bu çalışma alanında, mevcut Core oturumunda geçerlidir.",
                     "Ałek’ryŧhæ Komut Satırı İzni",
                     System.Windows.MessageBoxButton.YesNo,
                     System.Windows.MessageBoxImage.Warning,
@@ -406,6 +432,17 @@ namespace AlekrythaeCore
 
             if (elevated)
             {
+                // UAC alone does not explain that an application-triggered shell
+                // requested elevation. Obtain explicit app-level consent each time.
+                if (System.Windows.MessageBox.Show(
+                    "Bu .alek uygulaması YÖNETİCİ YETKİSİYLE ayrı bir Windows terminali " +
+                    "açmak istiyor. Bu terminal Core tarafından sınırlandırılamaz.\n\n" +
+                    workingDirectory + "\n\nDevam edilsin mi?",
+                    "Ałek’ryŧhæ Yönetici Terminali Uyarısı",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Warning,
+                    System.Windows.MessageBoxResult.No) != System.Windows.MessageBoxResult.Yes)
+                    return new { ok = false, error = "elevated_shell_permission_denied" };
                 try
                 {
                     string comSpec =
@@ -479,9 +516,11 @@ namespace AlekrythaeCore
                 session.Dispose();
                 return new { ok = false, error = "shell_registry_failed" };
             }
+            _shellWorkspaces[shellId] = token;
 
             session.Exited += code =>
             {
+                _shellWorkspaces.TryRemove(shellId, out _);
                 PushShellEvent(shellId, "exit", "", code);
 
                 if (_shells.TryRemove(shellId, out ConPtySession? removed))
@@ -494,6 +533,7 @@ namespace AlekrythaeCore
             if (session.TryGetExitCode(out int racedExitCode))
             {
                 _shells.TryRemove(shellId, out _);
+                _shellWorkspaces.TryRemove(shellId, out _);
                 session.Dispose();
 
                 return new
@@ -553,6 +593,7 @@ namespace AlekrythaeCore
             if (!_shells.TryRemove(shellId, out ConPtySession? session))
                 return new { ok = true, stopped = false };
 
+            _shellWorkspaces.TryRemove(shellId, out _);
             try { session.Dispose(); } catch { }
 
             return new { ok = true, stopped = true };
@@ -714,10 +755,10 @@ namespace AlekrythaeCore
                 return (File.GetAttributes(path) &
                     FileAttributes.ReparsePoint) != 0;
             }
-            catch
-            {
-                return false;
-            }
+            catch (FileNotFoundException) { return false; }
+            catch (DirectoryNotFoundException) { return false; }
+            // An unreadable path must never be treated as a verified safe path.
+            catch { return true; }
         }
 
         private static string NormalizeRoot(string path)
@@ -798,6 +839,7 @@ namespace AlekrythaeCore
             }
 
             _shells.Clear();
+            _shellWorkspaces.Clear();
             _workspaces.Clear();
             _shellApprovedWorkspaces.Clear();
             _webView = null;

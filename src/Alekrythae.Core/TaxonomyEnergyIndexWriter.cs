@@ -65,7 +65,9 @@ namespace AlekrythaeCore
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase
                 });
-            File.WriteAllText(outputPath, json);
+            if (File.Exists(outputPath) && string.Equals(File.ReadAllText(outputPath), json, StringComparison.Ordinal))
+                return;
+            Storage.AtomicFile.WriteText(outputPath, json);
         }
 
         private static ParsedLayer? ParseLayer(string? fileName)

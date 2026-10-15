@@ -1,19 +1,16 @@
 version: 2
 updates:
-  - package-ecosystem: "nuget"
-    directory: "/src/Alekrythae.Core"
+  - package-ecosystem: nuget
+    directory: '/'
     schedule:
-      interval: "weekly"
+      interval: weekly
+      day: monday
     open-pull-requests-limit: 5
-
-  - package-ecosystem: "nuget"
-    directory: "/tests/Alekrythae.Core.Tests"
+    labels: ['dependencies', 'security']
+  - package-ecosystem: github-actions
+    directory: '/'
     schedule:
-      interval: "weekly"
+      interval: weekly
+      day: monday
     open-pull-requests-limit: 5
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+    labels: ['dependencies', 'ci']

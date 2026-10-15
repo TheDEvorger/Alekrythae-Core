@@ -1,0 +1,23 @@
+// Disposable integration app: runs inside the real Core/WebView2, then closes itself.
+(async function nativeSmoke() {
+    const assert = (value, label) => { if (!value) throw new Error(label); };
+    try {
+        assert(window.__alekSave(JSON.stringify({legacy: "ışık 🌙"})), "legacy post");
+        const memory = await window.__alekReadJson("native-smoke.alek.json");
+        assert(memory.ok && memory.data.legacy === "ışık 🌙", "legacy FIFO/Unicode");
+        assert((await window.__alekGameEnsure("Fixture", "real_world")).ok, "ensure");
+        assert((await window.__alekGameWrite("Fixture", "map", {value: 42})).ok, "save");
+        const read = await window.__alekGameRead("Fixture", "map");
+        assert(read.ok && read.data.value === 42, "read");
+        assert((await window.__alekReadText("../outside.txt")).error === "invalid_path", "sandbox");
+        const burst = await Promise.all(Array.from({length: 20}, (_, i) => window.__alekWriteText(`burst/${i}.txt`, String(i))));
+        assert(burst.every(result => result.ok), "burst writes");
+        await window.__alekWriteJson("native-result.json", {ok: true, checks: ["legacy", "unicode", "sqlite", "sandbox", "burst"]});
+        // Submit a final write immediately followed by app.exit: the host must drain it.
+        window.__alekWriteText("tail.txt", "drained before exit");
+        window.__alekAPI("app.exit", {});
+    } catch (error) {
+        await window.__alekWriteJson("native-result.json", {ok: false, error: String(error.stack || error)});
+        window.__alekAPI("app.exit", {});
+    }
+})();

@@ -19,25 +19,44 @@ namespace AlekrythaeCore
         private static Application? _app;
         private const string Extension = ".alek";
         private const string ProgId = "Alekrythae.Nexus.v0";
-        internal const string DisplayName = "Ałek’ryŧhæ Core v2.0.0 (R6)";
-        internal const string DisplayVersion = "2.0.0";
+        internal const string DisplayName = "Ałek’ryŧhæ Core v2.1.0";
+        internal const string DisplayVersion = "2.1.0";
         // 'in ikinci açılış AI yaşam döngüsü eski Core tepside açık
         // olsa bile güncel süreçte çalışmalıdır. Ayrı pipe/mutex eski Core'a
         // yanlışlıkla yönlendirme yapılmasını engeller.
-        private const string PipeName = "AlekrythaePipeLine.AiReopenRevision11";
+        private const string PipeName = "AlekrythaePipeLine.StorageRevision15";
 
         private static readonly Dictionary<string, CosmicGate> _activeDimensions =
             new(StringComparer.OrdinalIgnoreCase);
 
         private static readonly Mutex _mutex =
-            new(false, "{Alekrythae-Core-Revision-11-Second-Launch-Dock-Recovery-Identity-Key}");
+            new(false, "{Alekrythae-Core-Revision-15-Stable-Single-Instance-Identity-Key}");
 
         private static bool _ownsMutex;
 
         [STAThread]
         public static void Main(string[] args)
         {
-            _ownsMutex = _mutex.WaitOne(TimeSpan.Zero, false);
+            // R9: Bir önceki Core sert biçimde sonlandıysa named mutex "abandoned"
+            // durumda kalabilir. WaitOne bu durumda kilidi aslında yeni sürece verir,
+            // fakat aynı anda AbandonedMutexException fırlatır. R6 bu exception'ı
+            // try/catch dışında bıraktığı için sonraki her Core açılışı daha UI/log
+            // sistemi kurulmadan kapanabiliyordu.
+            try
+            {
+                _ownsMutex = AcquirePrimaryMutex();
+            }
+            catch (Exception ex)
+            {
+                WriteBootstrapCrash("Single-instance başlangıcı başarısız.", ex);
+                System.Windows.MessageBox.Show(
+                    "Ałek’ryŧhæ Core başlatılamadı:\n\n" + ex.Message,
+                    "Ałek’ryŧhæ Core",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                try { _mutex.Dispose(); } catch { }
+                return;
+            }
 
             if (!_ownsMutex)
             {
@@ -45,6 +64,15 @@ namespace AlekrythaeCore
                 {
                     SendFileToMaster(args[0]);
                 }
+                else
+                {
+                    // Kullanıcı Core EXE'yi doğrudan çalıştırdıysa kayıt talebi
+                    // ikinci süreçten de güvenle tamamlanabilir.
+                    RegisterExtension();
+                    RegisterUninstallEntry();
+                }
+
+                try { _mutex.Dispose(); } catch { }
                 return;
             }
 
@@ -80,13 +108,14 @@ namespace AlekrythaeCore
                     ex.Handled = true;
                 };
 
-                RegisterExtension();
-                RegisterUninstallEntry();
-
-                // Core artık tek başına arka planda beklemez.
-                // Bir .alek dosyasıyla başlatılmadıysa kayıt işlemlerini tamamlayıp kapanır.
+                // Core EXE tek başına çalıştırıldığında kendisini Windows'a kaydeder.
+                // Bir .alek açılışı sırasında kayıt yazmıyoruz. Böylece farklı/deneme
+                // Core kopyaları yalnız bir dosya açtıkları için varsayılan ilişkilendirmeyi
+                // geçici bir bin/release yoluna sessizce taşıyamaz.
                 if (args.Length == 0)
                 {
+                    RegisterExtension();
+                    RegisterUninstallEntry();
                     return;
                 }
 
@@ -112,7 +141,45 @@ namespace AlekrythaeCore
                     // Uygulama kapanırken mutex zaten bırakılmış olabilir.
                 }
 
-                _mutex.Dispose();
+                try { _mutex.Dispose(); } catch { }
+            }
+        }
+
+        private static bool AcquirePrimaryMutex()
+        {
+            try
+            {
+                return _mutex.WaitOne(TimeSpan.Zero, false);
+            }
+            catch (AbandonedMutexException ex)
+            {
+                // Windows abandoned mutex'i yakalayan sürece ownership verir.
+                // Bu bir "Core açılamaz" durumu değil, önceki Core'un sert kapandığı
+                // anlamına gelir. Yeni süreç güvenle ana süreç olarak devam eder.
+                _ownsMutex = true;
+                WriteBootstrapCrash(
+                    "Önceki Core sert kapandığı için abandoned mutex kurtarıldı.",
+                    ex);
+                return true;
+            }
+        }
+
+        private static void WriteBootstrapCrash(string message, Exception? ex = null)
+        {
+            try
+            {
+                string path = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "alekrythae_crash.log");
+
+                string details = ex == null ? string.Empty : "\n" + ex;
+                File.AppendAllText(
+                    path,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{details}\n\n");
+            }
+            catch
+            {
+                // Başlangıç logu bile yazılamıyorsa Core yine de çalışmayı denesin.
             }
         }
 
@@ -489,6 +556,13 @@ namespace AlekrythaeCore
                     return;
                 }
 
+                if (!WebView2Prerequisite.EnsureInstalled(out string installationError))
+                {
+                    throw new InvalidOperationException(
+                        "Microsoft Edge WebView2 Runtime kurulamadı.\n" + installationError +
+                        "\n\nResmî indirme: https://developer.microsoft.com/en-us/microsoft-edge/webview2/");
+                }
+
                 var win = new CosmicGate(fullPath);
                 _activeDimensions.Add(fullPath, win);
                 win.Closed += (_, _) =>
@@ -540,7 +614,12 @@ namespace AlekrythaeCore
                 _trayIcon = null;
             }
 
-            _app?.Shutdown();
+            // Pipe sunucusunun yaşam döngüsü _app alanını izliyor. Önce alanı
+            // null'layıp sonra WPF dispatcher'ını kapatmak, kapanış sırasında yeni
+            // istek kabul etmeye devam eden "hayalet Core" penceresini daraltır.
+            Application? app = _app;
+            _app = null;
+            app?.Shutdown();
         }
 
         [DllImport("shell32.dll")]

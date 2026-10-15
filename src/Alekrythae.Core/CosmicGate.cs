@@ -15,6 +15,8 @@ using System.Windows.Interop;
 using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Web.WebView2.Core;
 using AlekrythaeCore.Media;
+using AlekrythaeCore.Storage;
+using AlekrythaeCore.Bridge;
 using Forms = System.Windows.Forms;
 using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
 using WpfKey = System.Windows.Input.Key;
@@ -23,11 +25,11 @@ using WpfModifierKeys = System.Windows.Input.ModifierKeys;
 
 namespace AlekrythaeCore
 {
-    public class CosmicGate : Window
+    public partial class CosmicGate : Window
     {
         private WebView2 _webView;
         private bool _hostExitRequested;
-        private volatile bool _hostExitClosed;
+        private bool _isClosing;
         private readonly EdgeChatGptDock _edgeChatGptDock;
         private readonly PortableGameStore _gameStore;
         private readonly DataTransferService _dataTransferService;
@@ -41,7 +43,7 @@ namespace AlekrythaeCore
         private bool _isWindowedFullscreen;
         private bool _isTitleBarAreaInWorkingSpace = true;
         private const double TitleBarHeight = 0; // Yerleşik WPF üst şeridi tamamen devre dışı.
-        private readonly string _webLogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "alekrythae_webview.log");
+        private readonly Diagnostics.BufferedFileLog _webLog = new(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "alekrythae_webview.log"));
         private CoreWebView2DevToolsProtocolEventReceiver? _consoleReceiver;
         private CoreWebView2DevToolsProtocolEventReceiver? _exceptionReceiver;
         private bool _webViewSuspended;
@@ -55,6 +57,11 @@ namespace AlekrythaeCore
         private ViodCeraBridge? _viodCeraBridge;
         private readonly bool _isViodCeraApp;
         private const int WmSysChar = 0x0106;
+        // R9: WebView2 WPF NavigateToString, generated HTML'i dahili bir data:text/html
+        // navigasyonu olarak başlatabiliyor. Top-level navigation kilidi bu tek, Core tarafından
+        // başlatılmış navigasyonu güvenli bir zaman penceresinde bir kez kabul eder.
+        private bool _allowGeneratedDocumentNavigation;
+        private DateTime _generatedDocumentNavigationDeadlineUtc = DateTime.MinValue;
 
         // Desteklenen dosya uzantıları
         private static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".webp", ".gif" };
@@ -69,6 +76,10 @@ namespace AlekrythaeCore
             string dir = Path.GetDirectoryName(Path.GetFullPath(jsPath)) ?? AppDomain.CurrentDomain.BaseDirectory;
             _rootFolder = dir.EndsWith(Path.DirectorySeparatorChar.ToString()) ? dir : dir + Path.DirectorySeparatorChar;
             _gameStore = new PortableGameStore(_rootFolder);
+            _paths = new SandboxPathPolicy(_rootFolder);
+            _storageLease = new RootStorageLease(_rootFolder);
+            _storageServices = new IStorageApiService[] { new FileApiService(_paths), _gameStore };
+            _requests = new SerialWorkQueue(ex => AppendWebLog("bridge worker failed: " + ex));
             _dataTransferService = new DataTransferService(_rootFolder, this);
             _developerBridge = new DeveloperBridge();
             _startFullscreen = ReadAlekWindowCommand(jsPath);
@@ -196,12 +207,24 @@ namespace AlekrythaeCore
             this.Loaded += async (s, e) => {
                 try
                 {
+                    if (_isClosing) return;
+
                     var environmentOptions = new CoreWebView2EnvironmentOptions
                     {
                         AdditionalBrowserArguments = GraphicsBridge.GetAdditionalBrowserArguments()
                     };
-                    var env = await CoreWebView2Environment.CreateAsync(null, _engineDataFolder, environmentOptions);
+
+                    var env = await CoreWebView2Environment.CreateAsync(
+                        null,
+                        _engineDataFolder,
+                        environmentOptions);
+
+                    // Pencere WebView2 environment hazırlanırken kapatılmış olabilir.
+                    if (_isClosing) return;
+
                     await _webView.EnsureCoreWebView2Async(env);
+                    if (_isClosing || _webView.CoreWebView2 == null) return;
+
                     _developerBridge.Attach(_webView.CoreWebView2, Dispatcher);
                     if (!_webViewZoomHooked)
                     {
@@ -253,19 +276,30 @@ namespace AlekrythaeCore
                     _webView.CoreWebView2.NewWindowRequested += OnNewWindowRequested;
                     _webView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
                     _webView.CoreWebView2.ProcessFailed += OnProcessFailed;
-#if DEBUG
+
+                    // R8: Release derlemelerinde de yalnız log amaçlı DevTools Protocol
+                    // console/exception dinleyicilerini bağla. DevTools arayüzü yine kapalıdır.
+                    // Böylece bir .alek bootstrap sırasında siyah ekranda kalırsa gerçek
+                    // JavaScript exception'ı alekrythae_webview.log içine düşer.
                     await EnableWebDiagnosticsAsync();
-#endif
+                    if (_isClosing) return;
                     // ========================================
 
+                    if (_isClosing) return;
                     FireUpJs();
-                    if (_isViodCeraApp && _viodCeraBridge == null)
+
+                    if (!_isClosing && _isViodCeraApp && _viodCeraBridge == null)
                     {
                         _viodCeraBridge = new ViodCeraBridge(this, _webView, SendResponse, AppendWebLog);
                     }
                 }
+                catch (ObjectDisposedException) when (_isClosing)
+                {
+                    // Kapanışla yarışan WebView2 başlatma callback'i. Normal yaşam döngüsü.
+                }
                 catch (Exception ex)
                 {
+                    if (_isClosing) return;
                     AppendWebLog("startup failed: " + ex);
                     System.Windows.MessageBox.Show($"Çekirdek Hatası: {ex.Message}");
                 }
@@ -274,6 +308,7 @@ namespace AlekrythaeCore
 
         private async Task UpdateWebViewPowerStateAsync()
         {
+            if (_isClosing || _hostExitRequested) return;
             if (_webView?.CoreWebView2 == null) return;
             if (_powerStateChangeInProgress)
             {
@@ -507,17 +542,7 @@ namespace AlekrythaeCore
 
         private void AppendWebLog(string message)
         {
-            try
-            {
-                const long maxLogBytes = 1024 * 1024;
-                if (File.Exists(_webLogPath) && new FileInfo(_webLogPath).Length >= maxLogBytes)
-                    File.WriteAllText(_webLogPath, string.Empty);
-                File.AppendAllText(_webLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
-            }
-            catch
-            {
-                // Loglama boyut penceresini asla bozmasın.
-            }
+            _webLog.Write(message);
         }
 
         private async Task EnableWebDiagnosticsAsync()
@@ -565,6 +590,28 @@ namespace AlekrythaeCore
             if (string.Equals(uri, "about:blank", StringComparison.OrdinalIgnoreCase))
                 return;
 
+            // R9 BLACK-SCREEN FIX:
+            // WebView2 WPF'nin NavigateToString uygulaması, bizim oluşturduğumuz HTML'i
+            // NavigationStarting içinde data:text/html;charset=utf-8;base64,... olarak
+            // gösterebilir. R8 bütün data: top-level navigasyonlarını iptal ettiği için
+            // Core kendi ürettiği belgeyi daha JavaScript çalışmadan engelliyordu.
+            //
+            // Güvenlik için data: genel olarak açılmıyor. Sadece FireUpJs tarafından
+            // hemen önce silahlandırılmış, kısa ömürlü ve tek kullanımlık başlangıç
+            // navigasyonu kabul edilir. Uygulama sonradan location=data: yaparsa bloklanır.
+            if (_allowGeneratedDocumentNavigation
+                && DateTime.UtcNow <= _generatedDocumentNavigationDeadlineUtc
+                && uri.StartsWith("data:text/html", StringComparison.OrdinalIgnoreCase))
+            {
+                _allowGeneratedDocumentNavigation = false;
+                _generatedDocumentNavigationDeadlineUtc = DateTime.MinValue;
+                AppendWebLog("allowed generated document navigation");
+                return;
+            }
+
+            _allowGeneratedDocumentNavigation = false;
+            _generatedDocumentNavigationDeadlineUtc = DateTime.MinValue;
+
             // The embedded surface is deliberately not a browser. Blocking top-level
             // navigation keeps the native file/database/shell bridge attached only to
             // the locally generated Ałek application document.
@@ -582,10 +629,14 @@ namespace AlekrythaeCore
 
         private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
         {
-            if (!e.IsSuccess)
-            {
-                AppendWebLog($"navigation failed: {e.WebErrorStatus}");
-            }
+            if (e.IsSuccess) return;
+
+            // NavigateToString ilk about:blank navigasyonunu yeni belgeyle değiştirdiğinde
+            // WebView2 OperationCanceled raporlayabilir. Bu gerçek bir app hatası değildir.
+            if (e.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled)
+                return;
+
+            AppendWebLog($"navigation failed: {e.WebErrorStatus}");
         }
 
         private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
@@ -678,112 +729,7 @@ namespace AlekrythaeCore
         // Relative path'i alır, root klasörle birleştirir, sandbox dışına
         // çıkış denemelerini engeller. Güvensizse null döner.
         // ============================================================
-        private string? ResolveSafePath(string? relativePath)
-        {
-            if (string.IsNullOrWhiteSpace(relativePath)) return null;
-
-            // Absolute path, farklı disk veya UNC engelle
-            if (Path.IsPathRooted(relativePath)) return null;
-
-            try
-            {
-                string combined = Path.GetFullPath(Path.Combine(_rootFolder, relativePath));
-
-                // Root dışına çıkış kontrolü (trailing separator sayesinde prefix collision önlenir)
-                if (!combined.StartsWith(_rootFolder, StringComparison.OrdinalIgnoreCase))
-                    return null;
-
-                // A junction/symlink inside the application tree could otherwise turn a
-                // syntactically safe relative path into access outside the sandbox. Reject
-                // every existing reparse-point segment between the app root and target.
-                string rootNoSlash = _rootFolder.TrimEnd(
-                    Path.DirectorySeparatorChar,
-                    Path.AltDirectorySeparatorChar);
-                if (PathContainsReparsePoint(rootNoSlash, combined))
-                    return null;
-
-                return combined;
-            }
-            catch
-            {
-                return null; // Geçersiz karakterler vs.
-            }
-        }
-
-        private static bool PathContainsReparsePoint(string root, string target)
-        {
-            try
-            {
-                string normalizedRoot = Path.GetFullPath(root).TrimEnd(
-                    Path.DirectorySeparatorChar,
-                    Path.AltDirectorySeparatorChar);
-                string normalizedTarget = Path.GetFullPath(target);
-
-                if (HasReparsePoint(normalizedRoot))
-                    return true;
-
-                string relative = Path.GetRelativePath(normalizedRoot, normalizedTarget);
-                if (relative == ".")
-                    return false;
-
-                string current = normalizedRoot;
-                foreach (string part in relative.Split(
-                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-                    StringSplitOptions.RemoveEmptyEntries))
-                {
-                    current = Path.Combine(current, part);
-                    if ((Directory.Exists(current) || File.Exists(current)) && HasReparsePoint(current))
-                        return true;
-                }
-
-                return false;
-            }
-            catch
-            {
-                // Fail closed if path inspection itself is unreliable.
-                return true;
-            }
-        }
-
-        private static bool HasReparsePoint(string path)
-        {
-            try
-            {
-                return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static void WriteTextAtomic(string destinationPath, string content)
-        {
-            string tempPath = destinationPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllText(tempPath, content, new System.Text.UTF8Encoding(false));
-                File.Move(tempPath, destinationPath, true);
-            }
-            finally
-            {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
-            }
-        }
-
-        private static void WriteBytesAtomic(string destinationPath, byte[] content)
-        {
-            string tempPath = destinationPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllBytes(tempPath, content);
-                File.Move(tempPath, destinationPath, true);
-            }
-            finally
-            {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
-            }
-        }
+        private string? ResolveSafePath(string? relativePath) => _paths.Resolve(relativePath);
 
         // ============================================================
         // C# → JS RESPONSE GÖNDERİCİ
@@ -792,14 +738,17 @@ namespace AlekrythaeCore
         {
             try
             {
+                if (_isClosing || _webView?.CoreWebView2 == null)
+                    return;
+
                 string json = JsonSerializer.Serialize(result);
                 string idEscaped = JsonSerializer.Serialize(requestId);
                 string script = $"window.__alekDispatch({idEscaped},{json})";
-                _webView.CoreWebView2.ExecuteScriptAsync(script);
+                _ = _webView.CoreWebView2.ExecuteScriptAsync(script);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("Response hatası: " + ex.Message);
+                AppendWebLog("bridge response failed: " + ex);
             }
         }
 
@@ -810,88 +759,11 @@ namespace AlekrythaeCore
         // ============================================================
         private void HandleHostExitRequest(string? requestId)
         {
-            if (!string.IsNullOrWhiteSpace(requestId))
-            {
-                SendResponse(requestId, new { ok = true, closing = true });
-            }
-
-            if (_hostExitRequested)
-                return;
-
+            if (_hostExitRequested) return;
             _hostExitRequested = true;
-            AppendWebLog("app.exit: host shutdown requested");
-
-            // Normal yol başarısız olursa süreç Ay ekranında sonsuza kadar kalmasın.
-            // OnClosed çalıştığında bayrak true olur ve bu emniyet yolu hiçbir şey yapmaz.
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(1500).ConfigureAwait(false);
-                if (_hostExitClosed)
-                    return;
-
-                try
-                {
-                    Application.Current?.Dispatcher.Invoke(() =>
-                    {
-                        if (!_hostExitClosed)
-                            Application.Current.Shutdown();
-                    });
-                }
-                catch
-                {
-                    // Bir sonraki aşama process fallback'tir.
-                }
-
-                await Task.Delay(650).ConfigureAwait(false);
-                if (_hostExitClosed)
-                    return;
-
-                try
-                {
-                    Environment.Exit(0);
-                }
-                catch
-                {
-                    // Process zaten kapanıyor olabilir.
-                }
-            });
-
-            void CloseNow()
-            {
-                if (_hostExitClosed)
-                    return;
-
-                try
-                {
-                    // WebMessageReceived zaten UI thread'de çalışır. BeginInvoke kullanmak
-                    // çıkışın renderer/dispatcher yaşam döngüsünün arkasında kalmasına yol açabiliyordu.
-                    // Close burada senkron olarak çağrılır.
-                    Close();
-                }
-                catch (Exception ex)
-                {
-                    AppendWebLog("app.exit Close failed: " + ex);
-                    try
-                    {
-                        Application.Current?.Shutdown();
-                    }
-                    catch
-                    {
-                        try { Environment.Exit(0); } catch { }
-                    }
-                }
-            }
-
-            if (Dispatcher.CheckAccess())
-            {
-                CloseNow();
-            }
-            else
-            {
-                Dispatcher.Invoke(
-                    new Action(CloseNow),
-                    System.Windows.Threading.DispatcherPriority.Send);
-            }
+            if (requestId != null) SendResponse(requestId, new { ok = true, closing = true });
+            AppendWebLog("app.exit: draining accepted requests before closing");
+            Close();
         }
 
         // ============================================================
@@ -899,76 +771,6 @@ namespace AlekrythaeCore
         // Eski mesajlar (id'siz): { "op":"save", "data":"..." } → geriye uyumlu
         // Yeni mesajlar (id'li):  { "op":"fs.readText", "id":"req_1", "payload":{...} }
         // ============================================================
-        private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
-        {
-            try
-            {
-                if (!IsTrustedBridgeSource(e.Source))
-                {
-                    AppendWebLog("blocked web message from untrusted source: " + (e.Source ?? string.Empty));
-                    return;
-                }
-
-                string raw = GetWebMessagePayload(e);
-                using var doc = JsonDocument.Parse(raw);
-                if (!doc.RootElement.TryGetProperty("op", out var opEl)) return;
-                string op = opEl.GetString() ?? "";
-
-                string? requestId = null;
-                if (doc.RootElement.TryGetProperty("id", out var requestIdEl) &&
-                    requestIdEl.ValueKind == JsonValueKind.String)
-                {
-                    requestId = requestIdEl.GetString();
-                }
-
-                // app.exit host seviyesinde özel komuttur. Promise id'si olsun veya olmasın
-                // API servis zincirine girmeden doğrudan pencere kapanışına gider.
-                if (string.Equals(op, "app.exit", StringComparison.OrdinalIgnoreCase))
-                {
-                    HandleHostExitRequest(requestId);
-                    return;
-                }
-
-                // Yeni API sistemi: id varsa Promise tabanlı response
-                if (requestId != null)
-                {
-                    JsonElement payload = doc.RootElement.TryGetProperty("payload", out var pEl)
-                        ? pEl : default;
-                    HandleApiRequest(op, requestId, payload);
-                    return;
-                }
-
-                // ====== ESKİ SİSTEM (GERİYE UYUMLU) ======
-                if (op == "save")
-                {
-                    string data = doc.RootElement.TryGetProperty("data", out var dEl)
-                        ? (dEl.GetString() ?? "{}") : "{}";
-                    WriteTextAtomic(_memoryPath, data);
-                }
-                else if (op == "reveal")
-                {
-                    // Hafıza dosyasını Windows Gezgini'nde aç ve seç
-                    if (File.Exists(_memoryPath))
-                    {
-                        System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{_memoryPath}\"");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("Köprü hatası: " + ex.Message);
-            }
-        }
-
-        private static string GetWebMessagePayload(CoreWebView2WebMessageReceivedEventArgs e)
-        {
-            using var envelope = JsonDocument.Parse(e.WebMessageAsJson);
-            if (envelope.RootElement.ValueKind == JsonValueKind.String)
-                return envelope.RootElement.GetString() ?? "";
-
-            return e.WebMessageAsJson;
-        }
-
         // ============================================================
         // API İSTEK İŞLEYİCİ
         // ============================================================
@@ -981,22 +783,6 @@ namespace AlekrythaeCore
 
                 if (TryHandleSafeAiApi(op, reqId, payload))
                     return;
-
-                // Meggy taşınabilir SQLite katmanı. Kayıt listesi Data/meggy.db,
-                // her maceranın bütün oyun durumu Games/<macera>/game.db içindedir.
-                if (_gameStore.TryHandleApi(op, payload, out object portableDbResult))
-                {
-                    SendResponse(reqId, portableDbResult);
-                    return;
-                }
-
-                // Sürümden bağımsız kullanıcı verisi kasası. Seçici yalnız
-                // kullanıcının açıkça başlattığı içe/dışa aktarma sırasında açılır.
-                if (_dataTransferService.TryHandleApi(op, payload, out object dataTransferResult))
-                {
-                    SendResponse(reqId, dataTransferResult);
-                    return;
-                }
 
                 // Core: Windows dosya seçicisi + harici medya denetimi.
                 // Bu iki işlem sandbox dosya API'sinden ayrıdır; yalnız kullanıcı
@@ -1039,245 +825,6 @@ namespace AlekrythaeCore
                         // Normalde OnWebMessageReceived bu komutu daha önce yakalar.
                         // Burada bırakılan yol doğrudan çağrılar için aynı sağlam davranışı korur.
                         HandleHostExitRequest(reqId);
-                        return;
-                    }
-
-                    // ─── fs.list ───
-                    case "fs.list":
-                    {
-                        string? safePath = string.IsNullOrEmpty(relPath) ? _rootFolder.TrimEnd(Path.DirectorySeparatorChar) : ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-                        if (!Directory.Exists(safePath)) { SendResponse(reqId, new { ok = false, error = "not_found" }); return; }
-
-                        var items = new List<object>();
-                        foreach (var d in Directory.GetDirectories(safePath))
-                            items.Add(new { name = Path.GetFileName(d), type = "directory" });
-                        foreach (var f in Directory.GetFiles(safePath))
-                            items.Add(new { name = Path.GetFileName(f), type = "file", size = new FileInfo(f).Length });
-
-                        SendResponse(reqId, new { ok = true, items });
-                        return;
-                    }
-
-                    // ─── fs.readText ───
-                    case "fs.readText":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-                        if (!File.Exists(safePath)) { SendResponse(reqId, new { ok = false, error = "not_found" }); return; }
-
-                        string content = File.ReadAllText(safePath, System.Text.Encoding.UTF8);
-                        SendResponse(reqId, new { ok = true, content });
-                        return;
-                    }
-
-                    // ─── fs.writeText ───
-                    case "fs.writeText":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-
-                        string content = "";
-                        if (payload.ValueKind == JsonValueKind.Object &&
-                            payload.TryGetProperty("content", out var cEl))
-                            content = cEl.GetString() ?? "";
-
-                        string? dir = Path.GetDirectoryName(safePath);
-                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                            Directory.CreateDirectory(dir);
-
-                        // BOM'suz + atomik yazma: önce .tmp'a yaz, sonra tek adımda yerine taşı.
-                        // Böylece yazma sırasında çökme/güç kesintisi olsa bile hedef dosya
-                        // ya eski ya yeni tam haliyle kalır; ayrıca BOM eklenmez.
-                        WriteTextAtomic(safePath, content);
-                        SendResponse(reqId, new { ok = true });
-                        return;
-                    }
-
-                    // ─── fs.readJson ───
-                    case "fs.readJson":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-                        if (!File.Exists(safePath)) { SendResponse(reqId, new { ok = false, error = "not_found" }); return; }
-
-                        string raw = File.ReadAllText(safePath, System.Text.Encoding.UTF8);
-                        try
-                        {
-                            using var jsonDoc = JsonDocument.Parse(raw);
-                            // Geçerli JSON — ham metni data olarak gönder (JS tarafında parse edilecek)
-                            string jsonStr = JsonSerializer.Serialize(new { ok = true });
-                            // data alanını ham JSON olarak ekle
-                            jsonStr = jsonStr.TrimEnd('}') + ",\"data\":" + raw + "}";
-                            string idEsc = JsonSerializer.Serialize(reqId);
-                            _webView.CoreWebView2.ExecuteScriptAsync($"window.__alekDispatch({idEsc},{jsonStr})");
-                        }
-                        catch (JsonException)
-                        {
-                            SendResponse(reqId, new { ok = false, error = "invalid_json" });
-                        }
-                        return;
-                    }
-
-                    // ─── fs.writeJson ───
-                    case "fs.writeJson":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-
-                        string jsonContent = "{}";
-                        if (payload.ValueKind == JsonValueKind.Object &&
-                            payload.TryGetProperty("data", out var dataEl))
-                        {
-                            jsonContent = JsonSerializer.Serialize(dataEl, new JsonSerializerOptions { WriteIndented = true });
-                        }
-
-                        string? dir = Path.GetDirectoryName(safePath);
-                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                            Directory.CreateDirectory(dir);
-
-                        // BOM'suz + atomik yazma: önce .tmp'a yaz, sonra tek adımda yerine taşı.
-                        WriteTextAtomic(safePath, jsonContent);
-                        SendResponse(reqId, new { ok = true });
-                        return;
-                    }
-
-                    // ─── fs.exists ───
-                    case "fs.exists":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-
-                        if (File.Exists(safePath))
-                            SendResponse(reqId, new { ok = true, exists = true, type = "file" });
-                        else if (Directory.Exists(safePath))
-                            SendResponse(reqId, new { ok = true, exists = true, type = "directory" });
-                        else
-                            SendResponse(reqId, new { ok = true, exists = false });
-                        return;
-                    }
-
-                    // ─── fs.mkdir ───
-                    case "fs.mkdir":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-
-                        Directory.CreateDirectory(safePath);
-                        SendResponse(reqId, new { ok = true });
-                        return;
-                    }
-
-                    // ─── fs.delete ───
-                    case "fs.delete":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-
-                        if (Directory.Exists(safePath))
-                        {
-                            // Güvenlik: klasör silme kapalı
-                            SendResponse(reqId, new { ok = false, error = "directory_delete_disabled" });
-                            return;
-                        }
-                        if (!File.Exists(safePath))
-                        {
-                            SendResponse(reqId, new { ok = false, error = "not_found" });
-                            return;
-                        }
-
-                        File.Delete(safePath);
-                        SendResponse(reqId, new { ok = true });
-                        return;
-                    }
-
-                    // ─── fs.move ───
-                    case "fs.move":
-                    {
-                        string sourceRel = "";
-                        string destinationRel = "";
-                        if (payload.ValueKind == JsonValueKind.Object)
-                        {
-                            if (payload.TryGetProperty("source", out var sourceEl)) sourceRel = sourceEl.GetString() ?? "";
-                            if (payload.TryGetProperty("destination", out var destinationEl)) destinationRel = destinationEl.GetString() ?? "";
-                        }
-                        string? sourcePath = ResolveSafePath(sourceRel);
-                        string? destinationPath = ResolveSafePath(destinationRel);
-                        if (sourcePath == null || destinationPath == null)
-                        {
-                            SendResponse(reqId, new { ok = false, error = "invalid_path" });
-                            return;
-                        }
-                        if (string.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase))
-                        {
-                            SendResponse(reqId, new { ok = true });
-                            return;
-                        }
-                        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
-                        {
-                            SendResponse(reqId, new { ok = false, error = "destination_exists" });
-                            return;
-                        }
-                        string? destinationParent = Path.GetDirectoryName(destinationPath);
-                        if (!string.IsNullOrEmpty(destinationParent)) Directory.CreateDirectory(destinationParent);
-                        if (Directory.Exists(sourcePath)) Directory.Move(sourcePath, destinationPath);
-                        else if (File.Exists(sourcePath)) File.Move(sourcePath, destinationPath);
-                        else
-                        {
-                            SendResponse(reqId, new { ok = false, error = "not_found" });
-                            return;
-                        }
-                        SendResponse(reqId, new { ok = true });
-                        return;
-                    }
-
-                    // ─── fs.deleteTree ───
-                    case "fs.deleteTree":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null)
-                        {
-                            SendResponse(reqId, new { ok = false, error = "invalid_path" });
-                            return;
-                        }
-                        string rootPath = _rootFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                        string dataRoot = Path.GetFullPath(Path.Combine(_rootFolder, "Data"));
-                        if (string.Equals(safePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), rootPath, StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(safePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), dataRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
-                        {
-                            SendResponse(reqId, new { ok = false, error = "protected_path" });
-                            return;
-                        }
-                        if (!Directory.Exists(safePath))
-                        {
-                            SendResponse(reqId, new { ok = false, error = "not_found" });
-                            return;
-                        }
-                        Directory.Delete(safePath, true);
-                        SendResponse(reqId, new { ok = true });
-                        return;
-                    }
-
-                    // ─── fs.writeBinary ───
-                    case "fs.writeBinary":
-                    {
-                        string? safePath = ResolveSafePath(relPath);
-                        if (safePath == null) { SendResponse(reqId, new { ok = false, error = "invalid_path" }); return; }
-
-                        string base64 = "";
-                        if (payload.ValueKind == JsonValueKind.Object &&
-                            payload.TryGetProperty("base64", out var b64El))
-                            base64 = b64El.GetString() ?? "";
-
-                        if (string.IsNullOrEmpty(base64)) { SendResponse(reqId, new { ok = false, error = "empty_data" }); return; }
-
-                        string? dir = Path.GetDirectoryName(safePath);
-                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                            Directory.CreateDirectory(dir);
-
-                        byte[] bytes = Convert.FromBase64String(base64);
-                        WriteBytesAtomic(safePath, bytes);
-                        SendResponse(reqId, new { ok = true });
                         return;
                     }
 
@@ -1590,9 +1137,11 @@ namespace AlekrythaeCore
         private void FireUpJs()
         {
             if (!File.Exists(_jsPath)) return;
+            System.Threading.Interlocked.Increment(ref _documentGeneration);
             _edgeChatGptDock.Hide();
             string jsContent = File.ReadAllText(_jsPath);
             string alekFolder = Path.GetDirectoryName(Path.GetFullPath(_jsPath)) ?? "";
+            AppendWebLog($"boot: {Path.GetFileName(_jsPath)} / js={jsContent.Length} chars");
 
             // Manifest'i dosyadan okuyup doğrudan aynı belgeye enjekte et. NavigateToString
             // ile açılan sayfanın opaque origin'i bazı WebView2 sürümlerinde virtual-host
@@ -1635,17 +1184,6 @@ namespace AlekrythaeCore
             }
             catch { memoryJson = "null"; }
 
-            // Ham JSON metnini JS tek-tırnaklı string literal'i içinde güvenle gömmek için kaçır.
-            // Sıra önemli: önce ters slash, sonra diğerleri.
-            string memoryJsForLiteral = (memoryJson ?? "null")
-                .Replace("\\", "\\\\")
-                .Replace("'", "\\'")
-                .Replace("\r", "\\r")
-                .Replace("\n", "\\n")
-                .Replace("\u2028", "\\u2028") // U+2028 LINE SEPARATOR — JS literal'inde kabul edilmez
-                .Replace("\u2029", "\\u2029") // U+2029 PARAGRAPH SEPARATOR
-                .Replace("</", "<\\/");        // erken </script> kapanışı koruması
-
             // ====== ASSET KEŞFİ ======
             string moonDataUrl = GetBluemoonUrl();
 
@@ -1681,109 +1219,27 @@ namespace AlekrythaeCore
                 }};
             ";
 
-            string injector = @"
-                // ====== ALEKRYTHAE KÖPRÜSÜ (JS<->C#) ======
-                window.__alekStorage = (function() {
-                    try { return JSON.parse('" + memoryJsForLiteral + @"'); } catch(e) { return null; }
-                })();
-                window.__alekSave = function(jsonString) {
-                    try {
-                        if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-                            window.chrome.webview.postMessage({ op: 'save', data: jsonString });
-                            return true;
-                        }
-                    } catch(e) { console.error('alekSave köprü hatası:', e); }
-                    return false;
-                };
-                window.__alekReveal = function() {
-                    try {
-                        if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-                            window.chrome.webview.postMessage({ op: 'reveal' });
-                        }
-                    } catch(e) {}
-                };
-                // ==========================================
-
-                // ====== YENİ DOSYA SİSTEMİ KÖPRÜSÜ (Promise tabanlı) ======
-                window.__alekPending = {};
-                window.__alekReqId = 0;
-
-                window.__alekDispatch = function(id, result) {
-                    if (window.__alekPending[id]) {
-                        window.__alekPending[id](result);
-                        delete window.__alekPending[id];
-                    }
-                };
-
-                window.__alekAPI = function(op, payload) {
-                    return new Promise(function(resolve) {
-                        var id = '__alek_' + (++window.__alekReqId);
-                        window.__alekPending[id] = resolve;
-                        try {
-                            window.chrome.webview.postMessage(JSON.stringify({ op: op, id: id, payload: payload || {} }));
-                        } catch(e) {
-                            delete window.__alekPending[id];
-                            resolve({ ok: false, error: 'bridge_unavailable' });
-                        }
-                    });
-                };
-
-                // Yardımcı fonksiyonlar
-                window.__alekReadText = function(p) { return window.__alekAPI('fs.readText', { path: p }); };
-                window.__alekWriteText = function(p, c) { return window.__alekAPI('fs.writeText', { path: p, content: c }); };
-                window.__alekReadJson = function(p) { return window.__alekAPI('fs.readJson', { path: p }); };
-                window.__alekWriteJson = function(p, d) { return window.__alekAPI('fs.writeJson', { path: p, data: d }); };
-                window.__alekList = function(p) { return window.__alekAPI('fs.list', { path: p || '' }); };
-                window.__alekExists = function(p) { return window.__alekAPI('fs.exists', { path: p }); };
-                window.__alekMkdir = function(p) { return window.__alekAPI('fs.mkdir', { path: p }); };
-                window.__alekDelete = function(p) { return window.__alekAPI('fs.delete', { path: p }); };
-                window.__alekMove = function(source, destination) { return window.__alekAPI('fs.move', { source: source, destination: destination }); };
-                window.__alekDeleteTree = function(p) { return window.__alekAPI('fs.deleteTree', { path: p }); };
-                window.__alekWriteBinary = function(p, b64) { return window.__alekAPI('fs.writeBinary', { path: p, base64: b64 }); };
-                window.__alekLoad = function(p) { return window.__alekAPI('alek.load', { path: p }); };
-                window.__alekRegistryRead = function() { return window.__alekAPI('db.registry.read', {}); };
-                window.__alekRegistryWrite = function(data) { return window.__alekAPI('db.registry.write', { data: data }); };
-                window.__alekGameEnsure = function(folder, mode) { return window.__alekAPI('db.game.ensure', { folder: folder, mode: mode }); };
-                window.__alekGameRead = function(folder, key) { return window.__alekAPI('db.game.read', { folder: folder, key: key }); };
-                window.__alekGameWrite = function(folder, key, data) { return window.__alekAPI('db.game.write', { folder: folder, key: key, data: data }); };
-                window.__alekGameHasDocument = function(folder, key) { return window.__alekAPI('db.game.hasDocument', { folder: folder, key: key }); };
-                window.__alekGameDelete = function(folder) { return window.__alekAPI('db.game.delete', { folder: folder }); };
-                window.__alekGameRename = function(oldFolder, newFolder) { return window.__alekAPI('db.game.rename', { oldFolder: oldFolder, newFolder: newFolder }); };
-                window.__alekDataExport = function() { return window.__alekAPI('data.export', {}); };
-                window.__alekDataImport = function() { return window.__alekAPI('data.import', {}); };
-
-                // Core harici medya yardımcıları.
-                // Dış yol yalnız dosya seçimi ve paket içine kopyalama süresince
-                // geçicidir; kalıcı oyun kaydına mutlak Windows yolu yazılmaz.
-                window.__alekMediaLinkMode = 'portable-copy';
-                window.__alekPickExternalMedia = function(options) {
-                    return window.__alekAPI('pickExternalMedia', options || {});
-                };
-                window.__alekProbeExternalMedia = function(path) {
-                    return window.__alekAPI('probeExternalMedia', { path: path });
-                };
-                window.__alekExternalMediaUrl = function(path) {
-                    if (!path) return '';
-                    return 'https://alek-external.local/media?path=' + encodeURIComponent(String(path));
-                };
-                // ===========================================================
-
-                const style = document.createElement('style');
-                style.innerHTML = '.alek-msg { position:fixed; top:20px; left:50%; transform:translateX(-50%); background:rgba(5,10,20,0.95); border:1px solid #3A7BD5; color:#E0E0E0; padding:15px 30px; border-radius:8px; box-shadow: 0 0 20px rgba(58,123,213,0.5); font-family:Consolas; z-index:9999; }';
-                document.head.appendChild(style);
-                // Not: window.Notice'i .alek dosyası kendi shim'inde override edecek;
-                // burada sadece fallback olarak duruyor (script yüklenmezse diye).
-                if (typeof window.Notice !== 'function') {
-                    window.alert = window.Notice = function(msg) {
-                        const b = document.createElement('div'); b.className='alek-msg'; b.innerText=msg; document.body.appendChild(b);
-                        setTimeout(() => b.remove(), 4000);
-                    };
-                }
-            ";
+            string injector = BridgeScript.Build(memoryJson);
 
             string safeJsContent = Regex.Replace(jsContent, "</script", "<\\/script", RegexOptions.IgnoreCase);
             string html = $"<!doctype html><html><head><meta charset='utf-8'></head><body style='background:transparent; color:white; font-family:sans-serif; margin:0; padding:0; width:100vw; height:100vh; overflow:hidden;'><script>{injector}</script><script>{assetsInjector}</script><script type='module'>{safeJsContent}</script></body></html>";
-            _webView.NavigateToString(html);
+            AppendWebLog($"boot html: {html.Length} chars");
+
+            // R9: OnNavigationStarting normalde data: top-level navigasyonlarını güvenlik
+            // amacıyla engeller. NavigateToString'ın kendi dahili data: navigasyonuna yalnız
+            // bu çağrı için izin ver. Bayrak ilk data:text/html olayında tüketilir.
+            _allowGeneratedDocumentNavigation = true;
+            _generatedDocumentNavigationDeadlineUtc = DateTime.UtcNow.AddSeconds(10);
+            try
+            {
+                _webView.NavigateToString(html);
+            }
+            catch
+            {
+                _allowGeneratedDocumentNavigation = false;
+                _generatedDocumentNavigationDeadlineUtc = DateTime.MinValue;
+                throw;
+            }
         }
 
         // ============================================================
@@ -1825,8 +1281,7 @@ namespace AlekrythaeCore
 
         protected override void OnClosed(EventArgs e)
         {
-            _hostExitClosed = true;
-            base.OnClosed(e);
+            _isClosing = true;
             if (_altSSystemCharacterHooked)
             {
                 try { ComponentDispatcher.ThreadPreprocessMessage -= OnThreadPreprocessMessage; } catch { }
@@ -1852,6 +1307,7 @@ namespace AlekrythaeCore
             try { _developerBridge.Dispose(); } catch { }
             try { _edgeChatGptDock.Dispose(); } catch { }
             _webView.Dispose();
+            base.OnClosed(e);
         }
     }
 }

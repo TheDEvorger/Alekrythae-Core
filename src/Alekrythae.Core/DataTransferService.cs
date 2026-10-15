@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
-using Microsoft.Win32;
+using AlekrythaeCore.Transfer;
+using System.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -30,6 +31,7 @@ namespace AlekrythaeCore
         private const int ArchitectureRevision = 126;
         private const long MaxArchiveBytes = 32L * 1024L * 1024L * 1024L;
         private const int MaxArchiveEntries = 50000;
+        private const long MaxPortableJsonFileBytes = 512L * 1024L * 1024L;
         private const string ManifestName = "alekrythae-data-manifest.json";
 
         private static readonly Regex SafeDocumentKey =
@@ -59,9 +61,11 @@ namespace AlekrythaeCore
         private readonly string _gamesFolder;
         private readonly string _registryPath;
         private readonly string _backupsFolder;
-        private readonly Window _owner;
+        private readonly ITransferFilePicker _picker;
 
-        public DataTransferService(string rootFolder, Window owner)
+        public DataTransferService(string rootFolder, Window owner) : this(rootFolder, new TransferFilePicker(owner)) { }
+
+        internal DataTransferService(string rootFolder, ITransferFilePicker picker)
         {
             _rootFolder = Path.GetFullPath(rootFolder)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -69,46 +73,26 @@ namespace AlekrythaeCore
             _gamesFolder = Path.Combine(_rootFolder, "Games");
             _registryPath = Path.Combine(_dataFolder, "meggy.db");
             _backupsFolder = Path.Combine(_rootFolder, "Backups");
-            _owner = owner;
+            _picker = picker;
         }
 
-        public bool TryHandleApi(string operation, JsonElement payload, out object result)
+        public Task<object> ExecuteAsync(string operation) => operation switch
         {
-            _ = payload;
-            switch (operation)
-            {
-                case "data.export":
-                    result = ExportWithPicker();
-                    return true;
-                case "data.import":
-                    result = ImportWithPicker();
-                    return true;
-                default:
-                    result = new { ok = false, error = "unsupported_data_transfer_operation" };
-                    return false;
-            }
-        }
+            "data.export" => ExportWithPickerAsync(),
+            "data.import" => ImportWithPickerAsync(),
+            _ => Task.FromResult<object>(new { ok = false, error = "unsupported_data_transfer_operation" })
+        };
 
-        private object ExportWithPicker()
+        private async Task<object> ExportWithPickerAsync()
         {
             try
             {
                 string stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-                var dialog = new SaveFileDialog
-                {
-                    Title = "Ałek’ryŧhæ Verisini Dışarı Aktar",
-                    FileName = $"Alekrythae-Meggy-Veri-{stamp}.alekdata",
-                    DefaultExt = ".alekdata",
-                    AddExtension = true,
-                    OverwritePrompt = true,
-                    Filter = "Ałek’ryŧhæ veri kasası (*.alekdata)|*.alekdata"
-                };
-
-                if (dialog.ShowDialog(_owner) != true)
-                    return new { ok = true, cancelled = true };
+                string? selectedPath = await _picker.SelectExportPathAsync($"Alekrythae-Meggy-Veri-{stamp}.alekdata").ConfigureAwait(false);
+                if (selectedPath == null) return new { ok = true, cancelled = true };
 
                 PackageBuildResult package = CreatePackage(
-                    dialog.FileName,
+                    selectedPath,
                     reason: "user-export",
                     sourceRevision: ArchitectureRevision);
 
@@ -130,7 +114,7 @@ namespace AlekrythaeCore
             }
         }
 
-        private object ImportWithPicker()
+        private async Task<object> ImportWithPickerAsync()
         {
             string workspace = Path.Combine(
                 Path.GetTempPath(),
@@ -138,24 +122,11 @@ namespace AlekrythaeCore
 
             try
             {
-                var dialog = new OpenFileDialog
-                {
-                    Title = "Ałek’ryŧhæ Verisini İçeri Aktar",
-                    Multiselect = false,
-                    CheckFileExists = true,
-                    Filter =
-                        "Desteklenen veri (*.alekdata;*.zip;*.db;*.json)|*.alekdata;*.zip;*.db;*.json|" +
-                        "Ałek’ryŧhæ veri kasası (*.alekdata)|*.alekdata|" +
-                        "Eski Meggy paketi (*.zip)|*.zip|" +
-                        "SQLite verisi (*.db)|*.db|" +
-                        "Eski JSON verisi (*.json)|*.json"
-                };
-
-                if (dialog.ShowDialog(_owner) != true)
-                    return new { ok = true, cancelled = true };
+                string? selectedPath = await _picker.SelectImportPathAsync().ConfigureAwait(false);
+                if (selectedPath == null) return new { ok = true, cancelled = true };
 
                 Directory.CreateDirectory(workspace);
-                SourceDescriptor source = PrepareSource(dialog.FileName, workspace);
+                SourceDescriptor source = PrepareSource(selectedPath, workspace);
                 List<SourceAdventure> adventures = DiscoverSourceAdventures(source.Root);
                 if (adventures.Count == 0)
                     throw new InvalidDataException(
@@ -296,11 +267,19 @@ namespace AlekrythaeCore
             {
                 if (!Directory.Exists(root.Full))
                     continue;
+                if ((File.GetAttributes(root.Full) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Dışa aktarmada Data/Games klasörü bir bağlantı olamaz.");
 
+                // Never follow directory junctions/symlinks into unrelated user data
+                // when exporting portable worlds.
                 foreach (string file in Directory.EnumerateFiles(
                     root.Full,
                     "*",
-                    SearchOption.AllDirectories).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+                    new EnumerationOptions
+                    {
+                        RecurseSubdirectories = true,
+                        AttributesToSkip = FileAttributes.ReparsePoint
+                    }).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
                 {
                     FileInfo info = new FileInfo(file);
                     string extension = info.Extension;
@@ -384,6 +363,10 @@ namespace AlekrythaeCore
             string selectedPath,
             string workspace)
         {
+            // Legacy Base64 JSON requires materializing text and decoded bytes.
+            // Prefer the ZIP-backed .alekdata format for large media collections.
+            if (new FileInfo(selectedPath).Length > MaxPortableJsonFileBytes)
+                throw new InvalidDataException("JSON veri kasası güvenli boyut sınırını aşıyor (512 MiB).");
             PortableJsonPackage package = JsonSerializer.Deserialize<PortableJsonPackage>(
                 File.ReadAllText(selectedPath, Encoding.UTF8),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
@@ -406,13 +389,17 @@ namespace AlekrythaeCore
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                 + Path.DirectorySeparatorChar;
             long total = 0;
+            var seenPortablePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (PortableJsonFile file in package.Files)
             {
                 string normalized = (file.Path ?? string.Empty).Replace('\\', '/');
                 if (!(normalized.StartsWith("Data/", StringComparison.OrdinalIgnoreCase)
                     || normalized.StartsWith("Games/", StringComparison.OrdinalIgnoreCase))
                     || normalized.Contains(":", StringComparison.Ordinal)
-                    || normalized.Split('/').Any(part => part == ".."))
+                    || !seenPortablePaths.Add(normalized)
+                    || normalized.Split('/').Any(part => string.IsNullOrWhiteSpace(part)
+                        || part is "." or ".." || part.EndsWith('.') || part.EndsWith(' ')
+                        || IsWindowsDeviceName(part)))
                 {
                     throw new InvalidDataException($"JSON veri kasasında güvenli olmayan yol: {normalized}");
                 }
@@ -494,6 +481,7 @@ namespace AlekrythaeCore
                 + Path.DirectorySeparatorChar;
             long extractedBytes = 0;
             int entryCount = 0;
+            var seenTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             using ZipArchive archive = ZipFile.OpenRead(archivePath);
             foreach (ZipArchiveEntry entry in archive.Entries)
@@ -502,14 +490,20 @@ namespace AlekrythaeCore
                 if (entryCount > MaxArchiveEntries)
                     throw new InvalidDataException("Arşiv güvenli dosya sayısı sınırını aşıyor.");
 
-                extractedBytes += entry.Length;
-                if (entry.Length < 0 || extractedBytes > MaxArchiveBytes)
+                if (entry.Length < 0 || entry.Length > MaxArchiveBytes - extractedBytes)
                     throw new InvalidDataException("Arşiv güvenli veri boyutu sınırını aşıyor.");
+                // Do not accept ZIP Unix symbolic links or Windows reparse entries.
+                if (((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000
+                    || ((entry.ExternalAttributes >> 16) & (int)FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Arşivde bağlantı girdisine izin verilmiyor.");
 
                 string normalized = entry.FullName.Replace('\\', '/');
+                string[] components = normalized.TrimEnd('/').Split('/');
                 if (normalized.StartsWith("/", StringComparison.Ordinal)
                     || normalized.Contains(":", StringComparison.Ordinal)
-                    || normalized.Split('/').Any(part => part == ".."))
+                    || components.Any(part => string.IsNullOrWhiteSpace(part)
+                        || part is "." or ".." || part.EndsWith('.') || part.EndsWith(' ')
+                        || IsWindowsDeviceName(part)))
                 {
                     throw new InvalidDataException("Arşivde güvenli olmayan bir yol bulundu.");
                 }
@@ -519,6 +513,8 @@ namespace AlekrythaeCore
                     normalized.Replace('/', Path.DirectorySeparatorChar)));
                 if (!target.StartsWith(destinationRoot, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Arşiv hedef klasör dışına çıkmaya çalışıyor.");
+                if (!seenTargets.Add(target.TrimEnd(Path.DirectorySeparatorChar)))
+                    throw new InvalidDataException("Arşivde yinelenen dosya veya klasör yolu bulundu.");
 
                 if (string.IsNullOrEmpty(entry.Name))
                 {
@@ -530,11 +526,37 @@ namespace AlekrythaeCore
                 using Stream input = entry.Open();
                 using FileStream output = new FileStream(
                     target,
-                    FileMode.Create,
+                    FileMode.CreateNew,
                     FileAccess.Write,
                     FileShare.None);
-                input.CopyTo(output);
+                byte[] buffer = new byte[128 * 1024];
+                long copied = 0;
+                int read;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    copied += read;
+                    if (copied > entry.Length || copied > MaxArchiveBytes - extractedBytes)
+                        throw new InvalidDataException("Arşiv açılırken güvenli veri sınırı aşıldı.");
+                    output.Write(buffer, 0, read);
+                }
+                if (copied != entry.Length)
+                    throw new InvalidDataException("Arşiv girdisinin gerçek boyutu bildirilen boyutla uyuşmuyor.");
+                extractedBytes += copied;
             }
+        }
+
+        private static bool IsWindowsDeviceName(string component)
+        {
+            string stem = component.Split('.')[0];
+            return stem.Equals("CON", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("CLOCK$", StringComparison.OrdinalIgnoreCase)
+                || (stem.Length == 4
+                    && (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                        || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+                    && stem[3] >= '1' && stem[3] <= '9');
         }
 
         private static PackageManifest? VerifyPackageIfPresent(
@@ -549,6 +571,8 @@ namespace AlekrythaeCore
             if (manifestPath == null)
                 return null;
 
+            if (new FileInfo(manifestPath).Length > 16L * 1024L * 1024L)
+                throw new InvalidDataException("Veri paketi manifesti güvenli boyut sınırını aşıyor.");
             PackageManifest manifest = JsonSerializer.Deserialize<PackageManifest>(
                 File.ReadAllText(manifestPath, Encoding.UTF8),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
@@ -565,12 +589,16 @@ namespace AlekrythaeCore
             string rootPrefix = Path.GetFullPath(packageRoot)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                 + Path.DirectorySeparatorChar;
-            foreach (PackageFile expected in manifest.Files ?? new List<PackageFile>())
+            if (manifest.Files == null || manifest.Files.Count > MaxArchiveEntries)
+                throw new InvalidDataException("Veri paketi manifest dosya listesi geçersiz.");
+            var declaredPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (PackageFile expected in manifest.Files)
             {
                 string path = Path.GetFullPath(Path.Combine(
                     packageRoot,
                     expected.Path.Replace('/', Path.DirectorySeparatorChar)));
                 if (!path.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
+                    || !declaredPaths.Add(path)
                     || !File.Exists(path))
                 {
                     throw new InvalidDataException($"Veri paketinde dosya eksik: {expected.Path}");
@@ -587,6 +615,18 @@ namespace AlekrythaeCore
                 }
             }
 
+            // Version 2 packages are fully enumerated by their manifest. Reject
+            // undeclared payloads; old manifestless ZIP imports remain supported.
+            if (manifest.FormatVersion >= 2)
+            {
+                foreach (string actual in Directory.EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories))
+                {
+                    if (string.Equals(actual, manifestPath, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!declaredPaths.Contains(actual))
+                        throw new InvalidDataException("Veri paketinde manifest dışı dosya var.");
+                }
+            }
             return manifest;
         }
 
@@ -1202,16 +1242,18 @@ namespace AlekrythaeCore
 
         private static SqliteConnection OpenReadOnlyDatabase(string path)
         {
-            var builder = new SqliteConnectionStringBuilder
+            var connection = new SqliteConnection(Storage.SqliteDatabase.ConnectionString(path, SqliteOpenMode.ReadOnly));
+            try
             {
-                DataSource = path,
-                Mode = SqliteOpenMode.ReadOnly,
-                Cache = SqliteCacheMode.Private,
-                Pooling = false
-            };
-            var connection = new SqliteConnection(builder.ToString());
-            connection.Open();
-            return connection;
+                connection.Open();
+                using var pragma = connection.CreateCommand();
+                pragma.CommandText = "PRAGMA trusted_schema = OFF;";
+                pragma.ExecuteNonQuery();
+                pragma.CommandText = "PRAGMA query_only = ON;";
+                pragma.ExecuteNonQuery();
+                return connection;
+            }
+            catch { connection.Dispose(); throw; }
         }
 
         private static void SnapshotDatabase(string sourcePath, string destinationPath)
@@ -1219,14 +1261,7 @@ namespace AlekrythaeCore
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
             TryDeleteFile(destinationPath);
             using SqliteConnection source = OpenReadOnlyDatabase(sourcePath);
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = destinationPath,
-                Mode = SqliteOpenMode.ReadWriteCreate,
-                Cache = SqliteCacheMode.Private,
-                Pooling = false
-            };
-            using var destination = new SqliteConnection(builder.ToString());
+            using var destination = new SqliteConnection(Storage.SqliteDatabase.ConnectionString(destinationPath));
             destination.Open();
             source.BackupDatabase(destination);
         }
